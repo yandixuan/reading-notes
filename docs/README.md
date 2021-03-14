@@ -1,9 +1,11 @@
 ---
 home: true
 heroImage: /image/hero.png
-tagline: 
-actionText: Quick Start →
-actionLink: /guide/
+tagline:
+actions:
+- text: Get Started
+  link: /guide/README.md
+  type: primary
 features:
 - title: Feature 1 Title
   details: Feature 1 Description
