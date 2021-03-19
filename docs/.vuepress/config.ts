@@ -6,7 +6,7 @@ const sidebar: SidebarConfig = {
     {
       isGroup: true,
       text: 'Java8源码阅读',
-      children: ['/guide/README.md', '/guide/ArrayDeque.md'],
+      children: ['/guide/README.md', '/guide/ArrayDeque.md', '/guide/HashMap.md', '/guide/TreeMap.md'],
     },
   ],
 };
@@ -14,11 +14,6 @@ const sidebar: SidebarConfig = {
 const config: UserConfig<DefaultThemeOptions> = {
   lang: 'zh-cn',
   base: '/',
-  bundlerConfig: {
-    chainWebpack: (config) => {
-      config.resolve.alias.set('@image', '/public/image/');
-    },
-  },
   title: '阅读笔记',
   head: [
     ['meta', { name: 'theme-color', content: '#3eaf7c' }],
@@ -48,6 +43,7 @@ const config: UserConfig<DefaultThemeOptions> = {
     sidebar: sidebar,
   },
   plugins: ['@vuepress/plugin-back-to-top', '@vuepress/plugin-medium-zoom'],
+  bundler: process.env.NODE_ENV === 'production' ? '@vuepress/webpack' : '@vuepress/vite',
 };
 
 export = config;
