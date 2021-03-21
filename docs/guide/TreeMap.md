@@ -17,7 +17,9 @@ public class TreeMap<K,V>
     extends AbstractMap<K,V>
     implements NavigableMap<K,V>, Cloneable, java.io.Serializable{
 
-    // value排序比较器
+    /**
+     *  key排序比较器
+     */
     private final Comparator<? super K> comparator;
     // 根节点
     private transient Entry<K,V> root;
@@ -49,7 +51,7 @@ public class TreeMap<K,V>
             // 获取map的比较器
             Comparator<?> c = ((SortedMap<?,?>)map).comparator();
             // 如果map的比较器与treeMap的比较器是相同的内存地址
-            // 或者是map与treeMap的comparator相同重写了equals方法
+            // 或者是map与treeMap的comparator相同(重写了equals方法)
             if (c == comparator || (c != null && c.equals(comparator))) {
                 // 次数加1
                 ++modCount;
@@ -147,16 +149,18 @@ public class TreeMap<K,V>
 
 ### computeRedLevel
 
-它的作用是用来计算完全二叉树的层数
+它的作用是用来计算完全二叉树红色节点的层数，在构造红黑树的时候，我们只需要最后一层设置成红色，其他层数全是黑色节点便满足红黑树特性。
 
-完全二叉树层级(level)与层级上的节点数(num)关系: num=(level+1) \* 2
+计算红色节点应该在红黑树哪一层,因为二叉树，因为每层二叉树要填满的话必须是 2 的倍数
 
-在构造红黑树的时候，我们只需要最后一层设置成红色，其他层数全是黑色节点便满足红黑树特性
+每层数据叠加是 1,1+2,1+2+4,1+2+4+8... 基本就是每层就是每层/2
 
 ```java
-
     private static int computeRedLevel(int sz) {
         int level = 0;
+        // 从0开始计算满二叉树最后一个元素索引位置为0,2,6,14...
+        // 可以看出m=(m+1)*2 前一个和后一个的递推关系 每一层计算
+        // 那么反过来就是m/2-1就是上一层的位置，最后一个m>=0的时候还要计算一次
         for (int m = sz - 1; m >= 0; m = m / 2 - 1)
             level++;
         return level;
