@@ -48,7 +48,8 @@ public class TreeMap<K,V>
     public void putAll(Map<? extends K, ? extends V> map) {
         // 获取map的元素大小
         int mapSize = map.size();
-        // 如果 TreeMap 刚初始化 putAll元素大小也不为空 并且是 SortedMap的实现类
+        // 如果 TreeMap 刚初始化（size==0） putAll元素大小也不为空 并且是 SortedMap的实现类才走下面逻辑
+        // 否则就调用put 一个个慢慢插入节点
         if (size==0 && mapSize!=0 && map instanceof SortedMap) {
             // 获取map的比较器
             Comparator<?> c = ((SortedMap<?,?>)map).comparator();
@@ -66,7 +67,78 @@ public class TreeMap<K,V>
                 return;
             }
         }
+        // 实际调用 put方法
         super.putAll(map);
+    }
+```
+
+### put
+
+```java
+    public V put(K key, V value) {
+        Entry<K,V> t = root;
+        // 如果根节点为空
+        if (t == null) {
+            // 判断比较器可用或者key自身是可以比较的（实现Comparable）
+            compare(key, key); // type (and possibly null) check
+            // 创建根节点
+            root = new Entry<>(key, value, null);
+            // size赋值
+            size = 1;
+            // 修改次数递增，然后返回null
+            modCount++;
+            return null;
+        }
+        int cmp;
+        Entry<K,V> parent;
+        // split comparator and comparable paths
+        // 获取比较器
+        Comparator<? super K> cpr = comparator;
+        // 如果比较器不为空
+        if (cpr != null) {
+            // 循环找节点，当t为空的时候结束循环
+            do {
+                parent = t;
+                cmp = cpr.compare(key, t.key);
+                if (cmp < 0)
+                    t = t.left;
+                else if (cmp > 0)
+                    t = t.right;
+                else
+                    // 找到了新值覆盖旧值并且返回旧值
+                    return t.setValue(value);
+            } while (t != null);
+        }
+        else {
+            // 如果比较器为空，那么key不能空否则空指针异常
+            if (key == null)
+                throw new NullPointerException();
+            // 类型强转
+            @SuppressWarnings("unchecked")
+                Comparable<? super K> k = (Comparable<? super K>) key;
+            // 分析同比较器一样
+            do {
+                parent = t;
+                cmp = k.compareTo(t.key);
+                if (cmp < 0)
+                    t = t.left;
+                else if (cmp > 0)
+                    t = t.right;
+                else
+                    return t.setValue(value);
+            } while (t != null);
+        }
+        // 新建Entry对象e
+        Entry<K,V> e = new Entry<>(key, value, parent);
+        if (cmp < 0)
+            parent.left = e;
+        else
+            parent.right = e;
+        // 插入修正
+        fixAfterInsertion(e);
+        size++;
+        modCount++;
+        return null;
     }
 ```
 
@@ -192,6 +264,22 @@ public class TreeMap<K,V>
     }
 ```
 
+### fixAfterInsertion
+
+插入修正
+
+### fixAfterDeletion
+
+删除修正
+
+### rotateLeft
+
+左旋节点
+
+### rotateRight
+
+右旋节点
+
 ### getEntry
 
 根据 key 找到 entry
@@ -289,7 +377,6 @@ public class TreeMap<K,V>
 - 如果节点没有右子树，则向上寻找父节点，直到父节点的左子树等于当前节点，则该父节点就是后继节点
 
 ```java
-
     static <K,V> TreeMap.Entry<K,V> successor(Entry<K,V> t) {
         // 如果节点为null，返回null
         if (t == null)
@@ -310,7 +397,7 @@ public class TreeMap<K,V>
             while (p != null && ch == p.right) {
                 ch = p;
                 p = p.parent;
-            }、
+            }
             return p;
         }
     }
