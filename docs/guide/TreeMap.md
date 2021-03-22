@@ -21,15 +21,15 @@ public class TreeMap<K,V>
      *  key排序比较器
      */
     private final Comparator<? super K> comparator;
-    // 根节点
+    /**
+    *   根节点
+    */
     private transient Entry<K,V> root;
-
     /**
      * 树的元素数量
      * The number of entries in the tree
      */
     private transient int size = 0;
-
     /**
      * 当前树被修改次数
      * The number of structural modifications to the tree.
@@ -71,12 +71,23 @@ public class TreeMap<K,V>
 ### buildFromSorted
 
 ```java
-
+    /**
+    *   根据有序数据建造红黑树
+    */
     private void buildFromSorted(int size, Iterator<?> it,
                                  java.io.ObjectInputStream str,
                                  V defaultVal)
         throws  java.io.IOException, ClassNotFoundException {
         this.size = size;
+        // 建造树 参数解析
+        // level起始层级 0
+        // 0 有序数据索引起始 0
+        // size-1 有序数据索引结束 size-1
+        // computeRedLevel(size) 红色节点层级
+        // 有序数据集合
+        // str 序列化相关 ObjectInputStream
+        // defaultVal 默认值
+         数据索引区间 [0,size-1]，computeRedLevel(size)红色节点
         root = buildFromSorted(0, 0, size-1, computeRedLevel(size),
                                it, str, defaultVal);
     }
@@ -98,12 +109,16 @@ public class TreeMap<K,V>
          * They are not actually indexed, we just proceed sequentially,
          * ensuring that items are extracted in corresponding order.
          */
-
+        // 如果hi<lo返回空 参数不正确
         if (hi < lo) return null;
-
+        // (index+end)/2取中位数
         int mid = (lo + hi) >>> 1;
-
+        // 左子树
         Entry<K,V> left  = null;
+
+        // 如果 lo < mid 就递归造第二层左子树 左子树递归完左子树 读取一次iterator 便是字节点的父节点 接着递归造右子树
+        // level+1:下一层，mid - 1就是下层左子树索引的结束位置
+        // 如果 mid==lo 说明左子树不能再造了 比如：7 8 9中位数就是 8 下次 buildFromSorted lo=7 mid=7 buildLeft结束
         if (lo < mid)
             left = buildFromSorted(level+1, lo, mid - 1, redLevel,
                                    it, str, defaultVal);
@@ -111,38 +126,46 @@ public class TreeMap<K,V>
         // extract key and/or value from iterator or stream
         K key;
         V value;
+        // 如果迭代器不为空
         if (it != null) {
+            // 如果参数传来的默认值为空，那么默认从迭代器去取元素
             if (defaultVal==null) {
+                // 获取key，value
                 Map.Entry<?,?> entry = (Map.Entry<?,?>)it.next();
                 key = (K)entry.getKey();
                 value = (V)entry.getValue();
             } else {
+                // defaultVal不为空就使用defaultVal
                 key = (K)it.next();
                 value = defaultVal;
             }
         } else { // use stream
+            // 如果迭代器为空，那么就使用 java.io.ObjectInputStream读取后为默认值
             key = (K) str.readObject();
             value = (defaultVal != null ? defaultVal : (V) str.readObject());
         }
-
+        // 刚才获取的 k,v 为子节点 或者 同时拥有左右子树 递归形式去获取
         Entry<K,V> middle =  new Entry<>(key, value, null);
 
         // color nodes in non-full bottommost level red
+        // Map.Entry<K,V>默认是黑色 如果level 递增到了 redLevel便把节点设置成红色
         if (level == redLevel)
             middle.color = RED;
-
+        // 如果左节点不为空 middle，left 互相关联
         if (left != null) {
             middle.left = left;
             left.parent = middle;
         }
 
+        // 如果mid <hi递归造右子树 直到 mide==hi
         if (mid < hi) {
             Entry<K,V> right = buildFromSorted(level+1, mid+1, hi, redLevel,
                                                it, str, defaultVal);
+            // middle，right互相关联
             middle.right = right;
             right.parent = middle;
         }
-
+        // 递归完成后整个红黑树就造完，使用了二分法，递归 O(log2N)
         return middle;
     }
 ```
@@ -164,5 +187,129 @@ public class TreeMap<K,V>
         for (int m = sz - 1; m >= 0; m = m / 2 - 1)
             level++;
         return level;
+    }
+```
+
+### getEntry
+
+根据 key 找到 entry
+
+```java
+    final Entry<K,V> getEntry(Object key) {
+        // Offload comparator-based version for sake of performance
+        // 如果comparator不为空
+        if (comparator != null)
+            return getEntryUsingComparator(key);
+        // 如果key为null 报空指针 所以TreeMap不能put Null
+        if (key == null)
+            throw new NullPointerException();
+        // key 基本数据类型包装累 String，Integer....基本都是实现了Comparable
+        @SuppressWarnings("unchecked")
+            Comparable<? super K> k = (Comparable<? super K>) key;
+        Entry<K,V> p = root;
+        // 遍历整个红黑树找节点
+        while (p != null) {
+            int cmp = k.compareTo(p.key);
+            if (cmp < 0)
+                p = p.left;
+            else if (cmp > 0)
+                p = p.right;
+            else
+                return p;
+        }
+        // 没找到返回Null
+        return null;
+    }
+
+    /**
+    *   使用比较器获取Entry
+    */
+    final Entry<K,V> getEntryUsingComparator(Object key) {
+        // 强转key
+        @SuppressWarnings("unchecked")
+            K k = (K) key;
+        // 获取比较器
+        Comparator<? super K> cpr = comparator;
+        if (cpr != null) {
+            Entry<K,V> p = root;
+            // 遍历整个红黑树找节点
+            while (p != null) {
+                // 通过比较key
+                int cmp = cpr.compare(k, p.key);
+                // 找左子树
+                if (cmp < 0)
+                    p = p.left;
+                // 找右子树
+                else if (cmp > 0)
+                    p = p.right;
+                else
+                // 相等便返回Entry
+                    return p;
+            }
+        }
+        return null;
+    }
+```
+
+### getFirstEntry
+
+默认升序排序，取最小的值，递归取左子树
+
+```java
+    final Entry<K,V> getFirstEntry() {
+        Entry<K,V> p = root;
+        if (p != null)
+            while (p.left != null)
+                p = p.left;
+        return p;
+    }
+```
+
+### getLastEntry
+
+默认升序排序，取最大的值，递归取右子树
+
+```java
+    final Entry<K,V> getLastEntry() {
+        Entry<K,V> p = root;
+        if (p != null)
+            while (p.right != null)
+                p = p.right;
+        return p;
+    }
+```
+
+### successor
+
+二叉树后继节点，中序遍历的后一个节点
+
+- 如果节点有右子树，则该节点的后继节点就是往右子树出发，然后转到右子树的左子树，一直到左子树的左子树为空
+- 如果节点没有右子树，则向上寻找父节点，直到父节点的左子树等于当前节点，则该父节点就是后继节点
+
+```java
+
+    static <K,V> TreeMap.Entry<K,V> successor(Entry<K,V> t) {
+        // 如果节点为null，返回null
+        if (t == null)
+            return null;
+        // 如果节点的右子树不为null
+        else if (t.right != null) {
+            Entry<K,V> p = t.right;
+            while (p.left != null)
+                p = p.left;
+            return p;
+        } else {
+            // 如果节点没有右子树
+            // 当前节点的父节点
+            Entry<K,V> p = t.parent;
+            // 当前节点
+            Entry<K,V> ch = t;
+            // 一直向上找直到 节点当它的父节点的左子树结束循环
+            while (p != null && ch == p.right) {
+                ch = p;
+                p = p.parent;
+            }、
+            return p;
+        }
     }
 ```
