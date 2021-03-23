@@ -264,22 +264,6 @@ public class TreeMap<K,V>
     }
 ```
 
-### fixAfterInsertion
-
-插入修正
-
-### fixAfterDeletion
-
-删除修正
-
-### rotateLeft
-
-左旋节点
-
-### rotateRight
-
-右旋节点
-
 ### getEntry
 
 根据 key 找到 entry
@@ -399,6 +383,111 @@ public class TreeMap<K,V>
                 p = p.parent;
             }
             return p;
+        }
+    }
+```
+
+## 树的辅助操作
+
+封装一下树的基本操作
+
+```java
+    /**
+    *   判断节点颜色
+    *   默认null节点为黑色，否则为红色节点
+    */
+    private static <K,V> boolean colorOf(Entry<K,V> p) {
+        return (p == null ? BLACK : p.color);
+    }
+    /**
+    *   获取节点的父节点
+    *   如果节点为null返回null，否则返回节点的父节点
+    */
+    private static <K,V> Entry<K,V> parentOf(Entry<K,V> p) {
+        return (p == null ? null: p.parent);
+    }
+
+    /**
+    *   如果节点不为null，设置节点颜色
+    */
+    private static <K,V> void setColor(Entry<K,V> p, boolean c) {
+        if (p != null)
+            p.color = c;
+    }
+    /**
+    *   返回左子树，如果节点为null，返回null
+    */
+    private static <K,V> Entry<K,V> leftOf(Entry<K,V> p) {
+        return (p == null) ? null: p.left;
+    }
+
+    /**
+    *   返回右子树，如果节点为null，返回null
+    */
+    private static <K,V> Entry<K,V> rightOf(Entry<K,V> p) {
+        return (p == null) ? null: p.right;
+    }
+
+```
+
+### fixAfterInsertion
+
+插入修正
+
+### fixAfterDeletion
+
+删除修正
+
+### rotateLeft（左旋节点）
+
+![树节点p左旋示意图](/images/rotate-left.png)
+
+如上图所示左旋 p 节点
+
+```java
+    private void rotateLeft(Entry<K,V> p) {
+        // 前提节点不能是null
+        if (p != null) {
+            // 获取右子树
+            Entry<K,V> r = p.right;
+            // p的右子树 变为 r 的左子树
+            p.right = r.left;
+            // 如果r的左子树不为空
+            if (r.left != null)
+                r.left.parent = p;
+            r.parent = p.parent;
+            if (p.parent == null)
+                root = r;
+            else if (p.parent.left == p)
+                p.parent.left = r;
+            else
+                p.parent.right = r;
+            r.left = p;
+            p.parent = r;
+        }
+    }
+```
+
+### rotateRight（右旋节点）
+
+![树节点p右旋示意图](/images/rotate-right.png)
+
+如上图所示右旋 p 节点
+
+```java
+    private void rotateRight(Entry<K,V> p) {
+        if (p != null) {
+            Entry<K,V> l = p.left;
+            p.left = l.right;
+            if (l.right != null) l.right.parent = p;
+            l.parent = p.parent;
+            if (p.parent == null)
+                root = l;
+            else if (p.parent.right == p)
+                p.parent.right = l;
+            else p.parent.left = l;
+            l.right = p;
+            p.parent = l;
         }
     }
 ```
