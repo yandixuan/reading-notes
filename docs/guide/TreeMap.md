@@ -430,21 +430,118 @@ public class TreeMap<K,V>
 
 ```
 
-### fixAfterInsertion
+### fixAfterInsertion（插入修正）
 
-插入修正
+```java
+    private void fixAfterInsertion(Entry<K,V> x) {
+        // 默认插入红色节点，这样不会破坏黑高，修正起来最方便
+        x.color = RED;
+        // 循环修正节点 当x不为空 并且 x不为根节点 并且 x的父节点为红节点 只要任意不满足即退出循环
+        // 只要 x节点的父节点为黑色那么 那么直接满足红黑树特性直接over
+        while (x != null && x != root && x.parent.color == RED) {
+            if (parentOf(x) == leftOf(parentOf(parentOf(x)))) {
+                Entry<K,V> y = rightOf(parentOf(parentOf(x)));
+                if (colorOf(y) == RED) {
+                    setColor(parentOf(x), BLACK);
+                    setColor(y, BLACK);
+                    setColor(parentOf(parentOf(x)), RED);
+                    x = parentOf(parentOf(x));
+                } else {
+                    if (x == rightOf(parentOf(x))) {
+                        x = parentOf(x);
+                        rotateLeft(x);
+                    }
+                    setColor(parentOf(x), BLACK);
+                    setColor(parentOf(parentOf(x)), RED);
+                    rotateRight(parentOf(parentOf(x)));
+                }
+            } else {
+                Entry<K,V> y = leftOf(parentOf(parentOf(x)));
+                if (colorOf(y) == RED) {
+                    setColor(parentOf(x), BLACK);
+                    setColor(y, BLACK);
+                    setColor(parentOf(parentOf(x)), RED);
+                    x = parentOf(parentOf(x));
+                } else {
+                    if (x == leftOf(parentOf(x))) {
+                        x = parentOf(x);
+                        rotateRight(x);
+                    }
+                    setColor(parentOf(x), BLACK);
+                    setColor(parentOf(parentOf(x)), RED);
+                    rotateLeft(parentOf(parentOf(x)));
+                }
+            }
+        }
+        root.color = BLACK;
+    }
+```
 
-### fixAfterDeletion
+### fixAfterDeletion（删除修正）
 
-删除修正
+```java
+
+    private void deleteEntry(Entry<K,V> p) {
+        modCount++;
+        size--;
+
+        // If strictly internal, copy successor's element to p and then make p
+        // point to successor.
+        if (p.left != null && p.right != null) {
+            Entry<K,V> s = successor(p);
+            p.key = s.key;
+            p.value = s.value;
+            p = s;
+        } // p has 2 children
+
+        // Start fixup at replacement node, if it exists.
+        Entry<K,V> replacement = (p.left != null ? p.left : p.right);
+
+        if (replacement != null) {
+            // Link replacement to parent
+            replacement.parent = p.parent;
+            if (p.parent == null)
+                root = replacement;
+            else if (p == p.parent.left)
+                p.parent.left  = replacement;
+            else
+                p.parent.right = replacement;
+
+            // Null out links so they are OK to use by fixAfterDeletion.
+            p.left = p.right = p.parent = null;
+
+            // Fix replacement
+            if (p.color == BLACK)
+                fixAfterDeletion(replacement);
+        } else if (p.parent == null) { // return if we are the only node.
+            root = null;
+        } else { //  No children. Use self as phantom replacement and unlink.
+            if (p.color == BLACK)
+                fixAfterDeletion(p);
+
+            if (p.parent != null) {
+                if (p == p.parent.left)
+                    p.parent.left = null;
+                else if (p == p.parent.right)
+                    p.parent.right = null;
+                p.parent = null;
+            }
+        }
+    }
+```
 
 ### rotateLeft（左旋节点）
 
-![树节点p左旋示意图](/images/rotate-left.png)
+左旋 p 节点(以 P 的右轴进行逆时针旋转)
 
-如上图所示左旋 p 节点
+          p                                         r
+       /    \              左旋转                 /    \
+      T1     r           --------->             p      T3
+           /   \                              /   \
+         T2     T3                           T1   T2
 
 ```java
+
     private void rotateLeft(Entry<K,V> p) {
         // 前提节点不能是null
         if (p != null) {
@@ -454,15 +551,24 @@ public class TreeMap<K,V>
             p.right = r.left;
             // 如果r的左子树不为空
             if (r.left != null)
+                // 将r与p进行连接
                 r.left.parent = p;
+            // 因为 r 要变成 p 的父节点
             r.parent = p.parent;
+            // 如果p是根节点
             if (p.parent == null)
+                // 直接将r设置成根节点
                 root = r;
+            // 如果p是左子树
             else if (p.parent.left == p)
+                // 将左子树设置成r
                 p.parent.left = r;
             else
+                // 否则设置成右子树
                 p.parent.right = r;
+            // r的左子树设置p节点
             r.left = p;
+            // 将p与r父子关系连接
             p.parent = r;
         }
     }
@@ -470,22 +576,37 @@ public class TreeMap<K,V>
 
 ### rotateRight（右旋节点）
 
-![树节点p右旋示意图](/images/rotate-right.png)
+                 p                                       L
+              /    \              右旋转                /    \
+             L     T2           --------->            T3      p
+           /  \                                             /   \
+          T3   T1                                           T1   T2
 
-如上图所示右旋 p 节点
+如上图所示右旋 p 节点(以 P 的左轴进行顺时针旋转)
 
 ```java
     private void rotateRight(Entry<K,V> p) {
+        // 节点不为null
         if (p != null) {
+            // 获取p的左子树
             Entry<K,V> l = p.left;
+            // 右旋之后，p的左边就是L的右边
             p.left = l.right;
+            // 如果L的右子树不为null那么 L的右子树的父节点为P
             if (l.right != null) l.right.parent = p;
+            // L的父节点变成P的父节点 因为L现在成为子树的根节点
             l.parent = p.parent;
+            // 如果p的父节点是null
             if (p.parent == null)
+                // 将L设置成根节点
                 root = l;
+            // 如果p是右子树
             else if (p.parent.right == p)
+                // p父节点的右子树是L
                 p.parent.right = l;
+            // 否则p父节点的左子树是L
             else p.parent.left = l;
+            // 关联关系 L的右子树是P P的父节点是L
             l.right = p;
             p.parent = l;
         }
