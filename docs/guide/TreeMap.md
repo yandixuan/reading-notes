@@ -438,41 +438,67 @@ public class TreeMap<K,V>
         x.color = RED;
         // 循环修正节点 当x不为空 并且 x不为根节点 并且 x的父节点为红节点 只要任意不满足即退出循环
         // 只要 x节点的父节点为黑色那么 那么直接满足红黑树特性直接over
+        // 只要父亲节点的颜色是红色就不满足红黑树特性，需要调整
         while (x != null && x != root && x.parent.color == RED) {
+            // 这里为了方便辨识，节点p=parentOf(x)；节点g=parentOf(parentOf(x))。
+            // 这里有个隐含条件 x,p为红色节点，g为黑色节点
             if (parentOf(x) == leftOf(parentOf(parentOf(x)))) {
+                // p是g的左子树
+                // y是p的兄弟节点
                 Entry<K,V> y = rightOf(parentOf(parentOf(x)));
                 if (colorOf(y) == RED) {
+                    // 如果y是红色节点
+                    // 那么我们只需要将y,p节点染红；g节点染红
+                    // 这里子树已经平衡了，但是g节点为红色可能不满足红黑树特效了那么指针x回溯至g节点继续向上循环
                     setColor(parentOf(x), BLACK);
                     setColor(y, BLACK);
                     setColor(parentOf(parentOf(x)), RED);
                     x = parentOf(parentOf(x));
                 } else {
+                    // 如果y节点是黑色节点（这里y是Null节点），如果不是则违背了红黑树性质
+
                     if (x == rightOf(parentOf(x))) {
+                        // 如果 x是p的右子树，需要左旋一次p节点，将节点调成一条线
+                        // x指针回溯至p节点，左旋p节点，之后p节点就是最下面的节点了
                         x = parentOf(x);
                         rotateLeft(x);
                     }
+                    // 将p节点染黑，g节点染红，右旋g节点
+                    // x成为根节点黑色，p,g为左右子树红色节点，没有改黑高满足性质
                     setColor(parentOf(x), BLACK);
                     setColor(parentOf(parentOf(x)), RED);
                     rotateRight(parentOf(parentOf(x)));
+                    // x节点红色，父节点黑色直接over了
                 }
             } else {
+                // p是g的右子树
+                // 前排判断了，所以直接找g的左子树y
                 Entry<K,V> y = leftOf(parentOf(parentOf(x)));
+
                 if (colorOf(y) == RED) {
+                     // 如果y是红色节点
+                     // 根上面一样，将y,p节点染黑，g节点染红，指针回溯至g点继续循环修正节点
                     setColor(parentOf(x), BLACK);
                     setColor(y, BLACK);
                     setColor(parentOf(parentOf(x)), RED);
                     x = parentOf(parentOf(x));
                 } else {
+                    // 这里跟上面一样，隐含条件y树null节点
+                    // 如果x是p的左子树
                     if (x == leftOf(parentOf(x))) {
+                        // x指针回溯至p点，右旋p节点，那么p节点变成最下层节点（也就是x）
                         x = parentOf(x);
                         rotateRight(x);
                     }
+                    // 将p节点染黑，g，y节点染红，然后左旋g节点，子树黑高不变，满足红黑树特效
                     setColor(parentOf(x), BLACK);
                     setColor(parentOf(parentOf(x)), RED);
                     rotateLeft(parentOf(parentOf(x)));
+                    // x节点红色，父节点黑色直接over了
                 }
             }
         }
+        // 有可能x是根节点，把根节点染黑
         root.color = BLACK;
     }
 ```
