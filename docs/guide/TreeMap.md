@@ -264,6 +264,81 @@ public class TreeMap<K,V>
     }
 ```
 
+### deleteEntry
+
+```java
+
+    private void deleteEntry(Entry<K,V> p) {
+        // 这里先 递增修改次数，元素数量递减
+        modCount++;
+        size--;
+
+        // If strictly internal, copy successor's element to p and then make p
+        // point to successor.
+
+        // 如果p的左右子树都不为空
+        if (p.left != null && p.right != null) {
+            // 因为删除的节点存在左右子树，那么只有去寻找p的后继节点，替换上来才行
+            Entry<K,V> s = successor(p);
+            // 将后继节点的值转给P值
+            // 读到这里我有疑惑了 look at https://blog.csdn.net/IdealSpring/article/details/83780609
+            p.key = s.key;
+            p.value = s.value;
+            // 既然s的值已经转给p 那么原本的S后继节点便是我们需要删除的节点，所以将p变量指向的对象改成s，删除就行了
+            p = s;
+        } // p has 2 children
+
+        // Start fixup at replacement node, if it exists.
+        // 因为p已经指向了后继节点 那么后继节点可能是右子树的最做子树 也可能是父节点并且是左子树的情况
+        // 那么如果要删除这个节点 得找到替换节点 优先考虑左子树再是右子树
+        Entry<K,V> replacement = (p.left != null ? p.left : p.right);
+        // 如果replacement存在
+        if (replacement != null) {
+            // Link replacement to parent
+            // replacement与p的父节点关联
+            replacement.parent = p.parent;
+            // 如果p是根节点
+            if (p.parent == null)
+                // 设置replacement节点为根节点
+                root = replacement;
+            else if (p == p.parent.left)
+                // 如果 p是左子树
+                // p的父节点的左子树是replacement
+                p.parent.left  = replacement;
+            else
+                // 如果 p是右子树
+                // p的父节点的右子树是replacement
+                p.parent.right = replacement;
+
+            // Null out links so they are OK to use by fixAfterDeletion.
+            // 将p的关联字段全部清空 gc
+            p.left = p.right = p.parent = null;
+
+            // Fix replacement
+            // 这里我们可以看成 r与p值互换了 我们删除的是replacement 所以我们修正的也是replacement节点
+            if (p.color == BLACK)
+                fixAfterDeletion(replacement);
+        } else if (p.parent == null) { // return if we are the only node.
+            // 如果p是根节点
+            // root置空
+            root = null;
+        } else { //  No children. Use self as phantom replacement and unlink.
+            // 如果p没有子节点
+            if (p.color == BLACK)
+                // 如果p的颜色是黑色节点，那么破坏黑高了，要修复
+                fixAfterDeletion(p);
+            // 移除p节点
+            if (p.parent != null) {
+                if (p == p.parent.left)
+                    p.parent.left = null;
+                else if (p == p.parent.right)
+                    p.parent.right = null;
+                p.parent = null;
+            }
+        }
+    }
+```
+
 ### getEntry
 
 根据 key 找到 entry
@@ -507,53 +582,69 @@ public class TreeMap<K,V>
 
 ```java
 
-    private void deleteEntry(Entry<K,V> p) {
-        modCount++;
-        size--;
+    private void fixAfterDeletion(Entry<K,V> x) {
 
-        // If strictly internal, copy successor's element to p and then make p
-        // point to successor.
-        if (p.left != null && p.right != null) {
-            Entry<K,V> s = successor(p);
-            p.key = s.key;
-            p.value = s.value;
-            p = s;
-        } // p has 2 children
+        while (x != root && colorOf(x) == BLACK) {
+            if (x == leftOf(parentOf(x))) {
+                Entry<K,V> sib = rightOf(parentOf(x));
 
-        // Start fixup at replacement node, if it exists.
-        Entry<K,V> replacement = (p.left != null ? p.left : p.right);
+                if (colorOf(sib) == RED) {
+                    setColor(sib, BLACK);
+                    setColor(parentOf(x), RED);
+                    rotateLeft(parentOf(x));
+                    sib = rightOf(parentOf(x));
+                }
 
-        if (replacement != null) {
-            // Link replacement to parent
-            replacement.parent = p.parent;
-            if (p.parent == null)
-                root = replacement;
-            else if (p == p.parent.left)
-                p.parent.left  = replacement;
-            else
-                p.parent.right = replacement;
+                if (colorOf(leftOf(sib))  == BLACK &&
+                    colorOf(rightOf(sib)) == BLACK) {
+                    setColor(sib, RED);
+                    x = parentOf(x);
+                } else {
+                    if (colorOf(rightOf(sib)) == BLACK) {
+                        setColor(leftOf(sib), BLACK);
+                        setColor(sib, RED);
+                        rotateRight(sib);
+                        sib = rightOf(parentOf(x));
+                    }
+                    setColor(sib, colorOf(parentOf(x)));
+                    setColor(parentOf(x), BLACK);
+                    setColor(rightOf(sib), BLACK);
+                    rotateLeft(parentOf(x));
+                    x = root;
+                }
+            } else { // symmetric
+                Entry<K,V> sib = leftOf(parentOf(x));
 
-            // Null out links so they are OK to use by fixAfterDeletion.
-            p.left = p.right = p.parent = null;
+                if (colorOf(sib) == RED) {
+                    setColor(sib, BLACK);
+                    setColor(parentOf(x), RED);
+                    rotateRight(parentOf(x));
+                    sib = leftOf(parentOf(x));
+                }
 
-            // Fix replacement
-            if (p.color == BLACK)
-                fixAfterDeletion(replacement);
-        } else if (p.parent == null) { // return if we are the only node.
-            root = null;
-        } else { //  No children. Use self as phantom replacement and unlink.
-            if (p.color == BLACK)
-                fixAfterDeletion(p);
-
-            if (p.parent != null) {
-                if (p == p.parent.left)
-                    p.parent.left = null;
-                else if (p == p.parent.right)
-                    p.parent.right = null;
-                p.parent = null;
+                if (colorOf(rightOf(sib)) == BLACK &&
+                    colorOf(leftOf(sib)) == BLACK) {
+                    setColor(sib, RED);
+                    x = parentOf(x);
+                } else {
+                    if (colorOf(leftOf(sib)) == BLACK) {
+                        setColor(rightOf(sib), BLACK);
+                        setColor(sib, RED);
+                        rotateLeft(sib);
+                        sib = leftOf(parentOf(x));
+                    }
+                    setColor(sib, colorOf(parentOf(x)));
+                    setColor(parentOf(x), BLACK);
+                    setColor(leftOf(sib), BLACK);
+                    rotateRight(parentOf(x));
+                    x = root;
+                }
             }
         }
+
+        setColor(x, BLACK);
     }
+
 ```
 
 ### rotateLeft（左旋节点）
