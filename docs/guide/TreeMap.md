@@ -289,8 +289,7 @@ public class TreeMap<K,V>
         } // p has 2 children
 
         // Start fixup at replacement node, if it exists.
-        // 因为p已经指向了后继节点 那么后继节点可能是右子树的最做子树 也可能是父节点并且是左子树的情况
-        // 那么如果要删除这个节点 得找到替换节点 优先考虑左子树再是右子树
+        // 经过上面的转换，p要么没有子节点，要么只有一个子节点
         Entry<K,V> replacement = (p.left != null ? p.left : p.right);
         // 如果replacement存在
         if (replacement != null) {
@@ -580,18 +579,36 @@ public class TreeMap<K,V>
 
 ### fixAfterDeletion（删除修正）
 
+CASE1: X-BLACK P-BLACK SIB-RED
+
+         p(B)                               p(R)                              sib(B)
+       /     \             染色            /     \               左旋p         /   \
+    x(B)    sib(R)      --------->      x(B)    sib(B)       --------->     P(R)  rs(B)
+           /    \                              /   \                       /   \
+         ls(B)  rs(B)                        ls(B)  rs(B)                 X(B)  ls(B)
+
+CASE2: X-BLACK SIB-BLACK P 的颜色无所谓
+
 ```java
 
     private void fixAfterDeletion(Entry<K,V> x) {
-
+        // 到了这里X节点只能是叶子节点，那么我们要考虑叶子节点为黑色情况的删除，这样会影响红黑树的黑高
+        // 只要x不为根节点且为黑色，就需要调整
         while (x != root && colorOf(x) == BLACK) {
+            // 如果x是左子树
+            // 因为x是子节点 必然存在兄弟节点 不然不满足红黑树特性
             if (x == leftOf(parentOf(x))) {
+                // 兄弟节点
                 Entry<K,V> sib = rightOf(parentOf(x));
-
+                // 如果兄弟节点是红色，那么根据红黑树特性，兄弟节点必然有黑色子树存在
+                // CASE1
                 if (colorOf(sib) == RED) {
+                    // 将兄弟节点染黑，x的父节点染红
                     setColor(sib, BLACK);
                     setColor(parentOf(x), RED);
+                    // 左旋x的父节点
                     rotateLeft(parentOf(x));
+                    //sib指向X右兄弟节点
                     sib = rightOf(parentOf(x));
                 }
 
@@ -613,6 +630,7 @@ public class TreeMap<K,V>
                     x = root;
                 }
             } else { // symmetric
+                // 如果x是右子树
                 Entry<K,V> sib = leftOf(parentOf(x));
 
                 if (colorOf(sib) == RED) {
