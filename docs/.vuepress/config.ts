@@ -6,7 +6,13 @@ const sidebar: SidebarConfig = {
     {
       isGroup: true,
       text: 'Java8源码阅读',
-      children: ['/guide/README.md', '/guide/ArrayDeque.md', '/guide/HashMap.md', '/guide/TreeMap.md'],
+      children: [
+        '/guide/README.md',
+        '/guide/ArrayDeque.md',
+        '/guide/HashMap.md',
+        '/guide/TreeMap.md',
+        '/guide/ArrayList.md',
+      ],
     },
   ],
 };

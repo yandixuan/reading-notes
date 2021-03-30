@@ -314,8 +314,11 @@ public class TreeMap<K,V>
             p.left = p.right = p.parent = null;
 
             // Fix replacement
-            // 这里我们可以看成 r与p值互换了 我们删除的是replacement 所以我们修正的也是replacement节点
+            // 到这里p节点已经删除，换成了replacement，
+            // 如果p节点的颜色是黑色，那么从replacement我们要开始修正红黑树
             if (p.color == BLACK)
+                // 因为p有一个子节点，隐含条件 子节点为红色 在修正删除的代码里也不会走循环
+                // 删除p之后直接设置replacement为黑色节点 调整over
                 fixAfterDeletion(replacement);
         } else if (p.parent == null) { // return if we are the only node.
             // 如果p是根节点
@@ -429,7 +432,7 @@ public class TreeMap<K,V>
 
 ### successor
 
-二叉树后继节点，中序遍历的后一个节点
+对一棵二叉树进行中序遍历，遍历后的顺序，当前节点的后一个节点为该节点的后继节点。
 
 - 如果节点有右子树，则该节点的后继节点就是往右子树出发，然后转到右子树的左子树，一直到左子树的左子树为空
 - 如果节点没有右子树，则向上寻找父节点，直到父节点的左子树等于当前节点，则该父节点就是后继节点
@@ -460,6 +463,50 @@ public class TreeMap<K,V>
         }
     }
 ```
+
+### predecessor
+
+对一棵二叉树进行中序遍历，遍历后的顺序，当前节点的前一个节点为该节点的前驱节点；
+
+- 如果节点的左子树不为空，循环遍历右子树，直到到结束就是前驱节点
+- 如果节点的左子树为空，向上遍历父节点直到，该节点是右子树为止，那么该节点是前驱节点
+
+```java
+    static <K,V> Entry<K,V> predecessor(Entry<K,V> t) {
+        if (t == null)
+            return null;
+        else if (t.left != null) {
+            Entry<K,V> p = t.left;
+            while (p.right != null)
+                p = p.right;
+            return p;
+        } else {
+            Entry<K,V> p = t.parent;
+            Entry<K,V> ch = t;
+            while (p != null && ch == p.left) {
+                ch = p;
+                p = p.parent;
+            }
+            return p;
+        }
+    }
+```
+
+### getCeilingEntry
+
+获取 TreeMap 中不小于 key 的最小的节点；
+
+### getFloorEntry
+
+获取 TreeMap 中不大于 key 的最大的节点；
+
+### getHigherEntry
+
+获取 TreeMap 中大于 key 的最小的节点。
+
+### getLowerEntry
+
+获取 TreeMap 中小于 key 的最大的节点。
 
 ## 树的辅助操作
 
@@ -579,7 +626,11 @@ public class TreeMap<K,V>
 
 ### fixAfterDeletion（删除修正）
 
-CASE1: X-BLACK P-BLACK SIB-RED
+#### 如果删除的节点，存在一个字节点，那么如果节点是黑色，直接用子节点替换染黑就行，如果是红色节点的话直接删除不需要进行调整
+
+#### 要删除的节点，为子节点有 4 种情况
+
+CASE1: X-BLACK P-BLACK SIB-RED (p 染红，sib 染黑，右旋 p 转化为 case2)
 
          p(B)                               p(R)                              sib(B)
        /     \             染色            /     \               左旋p         /   \
@@ -587,7 +638,27 @@ CASE1: X-BLACK P-BLACK SIB-RED
            /    \                              /   \                       /   \
          ls(B)  rs(B)                        ls(B)  rs(B)                 X(B)  ls(B)
 
-CASE2: X-BLACK SIB-BLACK P 的颜色无所谓
+CASE2: X-BLACK SIB-BLACK (sib 染红，x 指向 p，退出循环，p 染黑，删除 x 节点，调整 over)
+
+         p(R)            染色           p(R)
+        /     \        --------->     /    \
+      x(B)    sib(B)                 x(B)  sib(R)
+
+CASE3: X-BLACK SIB-BLACK LS-RED P-无所谓 (sib 染红，ls 染黑，右旋 sib，转化为 case4)
+
+         p(?)                           p(?)                      p(?)
+        /   \             染色          /   \         右旋sib     /   \
+      x(B)   sib(B)    --------->   x(B)   sib(R)  --------->  x(B)  ls(B)
+              /                             /                          \
+           ls(R)                          ls(B)                       sib(R)
+
+CASE4: X-BLACK SIB-BLACK RS-RED P-无所谓(sib 染成 p 的颜色，p 染黑，rs 染黑，左旋 p，删除 x 节点后平衡，调整 over)
+
+          p(*)                           p(B)                      sib(*)
+        /    \            染色          /   \         左旋p         /   \
+      x(B)   sib(B)    --------->   x(B)   sib(*)  --------->  p(B)   ls(B)
+                \                             \                /
+                rs(R)                         rs(B)          x(B)
 
 ```java
 
@@ -601,7 +672,7 @@ CASE2: X-BLACK SIB-BLACK P 的颜色无所谓
                 // 兄弟节点
                 Entry<K,V> sib = rightOf(parentOf(x));
                 // 如果兄弟节点是红色，那么根据红黑树特性，兄弟节点必然有黑色子树存在
-                // CASE1
+                // case1
                 if (colorOf(sib) == RED) {
                     // 将兄弟节点染黑，x的父节点染红
                     setColor(sib, BLACK);
@@ -610,19 +681,26 @@ CASE2: X-BLACK SIB-BLACK P 的颜色无所谓
                     rotateLeft(parentOf(x));
                     //sib指向X右兄弟节点
                     sib = rightOf(parentOf(x));
-                }
-
+                 }
+                // case2
+                // 兄弟节点为黑色且无子节点
                 if (colorOf(leftOf(sib))  == BLACK &&
                     colorOf(rightOf(sib)) == BLACK) {
+                    // 兄弟节点设置成红色
                     setColor(sib, RED);
+                    // 指针回溯至x的父亲
+                    // 因为case1--->case2 父亲为红色节点 退出循环
                     x = parentOf(x);
                 } else {
+                    // 兄弟节点只有红色左子节点
+                    // case3:
                     if (colorOf(rightOf(sib)) == BLACK) {
                         setColor(leftOf(sib), BLACK);
                         setColor(sib, RED);
                         rotateRight(sib);
                         sib = rightOf(parentOf(x));
                     }
+                    // case4
                     setColor(sib, colorOf(parentOf(x)));
                     setColor(parentOf(x), BLACK);
                     setColor(rightOf(sib), BLACK);
@@ -630,7 +708,8 @@ CASE2: X-BLACK SIB-BLACK P 的颜色无所谓
                     x = root;
                 }
             } else { // symmetric
-                // 如果x是右子树
+                // 当前节点是其父节点的右子节点
+                // 与当前节点是其父节点的左子节点的调整思想相同，旋转操作是对称的
                 Entry<K,V> sib = leftOf(parentOf(x));
 
                 if (colorOf(sib) == RED) {
@@ -659,7 +738,7 @@ CASE2: X-BLACK SIB-BLACK P 的颜色无所谓
                 }
             }
         }
-
+        // 最后x如果是红色节点退出循环，我们将x染黑（在调整循环种，x的指针可能改变）
         setColor(x, BLACK);
     }
 
@@ -746,4 +825,8 @@ CASE2: X-BLACK SIB-BLACK P 的颜色无所谓
             p.parent = l;
         }
     }
+```
+
+```
+
 ```
