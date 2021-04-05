@@ -251,18 +251,25 @@ with a parameter of about 0.5 on average for the default resizing threshold of 0
             // 调用 resize 扩容
             n = (tab = resize()).length;
         if ((p = tab[i = (n - 1) & hash]) == null)
+            // 没有hash冲突
             tab[i] = newNode(hash, key, value, null);
         else {
             Node<K,V> e; K k;
+            // put进来的key 如果 hash值冲突 并且key值相等或者对象equal是一样的
             if (p.hash == hash &&
                 ((k = p.key) == key || (key != null && key.equals(k))))
+                // 直接e指向p
                 e = p;
             else if (p instanceof TreeNode)
+                // r如果p是TreeNode实例那么调用TreeNode 的putTreeVal
                 e = ((TreeNode<K,V>)p).putTreeVal(this, tab, hash, key, value);
             else {
+                // 这里要统计链表的数量，好控制树化
                 for (int binCount = 0; ; ++binCount) {
                     if ((e = p.next) == null) {
+                        // 往链表的下一个塞入Node
                         p.next = newNode(hash, key, value, null);
+                        // 如果 链表的数量达到临界值，进行树化
                         if (binCount >= TREEIFY_THRESHOLD - 1) // -1 for 1st
                             treeifyBin(tab, hash);
                         break;
@@ -353,11 +360,13 @@ with a parameter of about 0.5 on average for the default resizing threshold of 0
                         ((TreeNode<K,V>)e).split(this, newTab, j, oldCap);
                     else { // preserve order
                         // 如果节点是链表
+                        // 分出高，低位链表
                         Node<K,V> loHead = null, loTail = null;
                         Node<K,V> hiHead = null, hiTail = null;
                         Node<K,V> next;
                         do {
                             next = e.next;
+                            // 判断是不是原数组的位置
                             if ((e.hash & oldCap) == 0) {
                                 if (loTail == null)
                                     loHead = e;
@@ -373,12 +382,16 @@ with a parameter of about 0.5 on average for the default resizing threshold of 0
                                 hiTail = e;
                             }
                         } while ((e = next) != null);
+                        // 如果低位链表尾节点不为空，
                         if (loTail != null) {
                             loTail.next = null;
+                            // 插入原来相应的位置
                             newTab[j] = loHead;
                         }
+                        // 如果低位链表尾节点不为空，
                         if (hiTail != null) {
                             hiTail.next = null;
+                            // 指向新的位置
                             newTab[j + oldCap] = hiHead;
                         }
                     }
@@ -389,7 +402,76 @@ with a parameter of about 0.5 on average for the default resizing threshold of 0
     }
 ```
 
+### treeifyBin
+
+如果元素数组为空 或者 数组长度小于 树结构化的最小限制
+MIN_TREEIFY_CAPACITY 默认值 64，对于这个值可以理解为：如果元素数组长度小于这个值，没有必要去进行结构转换
+当一个数组位置上集中了多个键值对，那是因为这些 key 的 hash 值和数组长度取模之后结果相同。（并不是因为这些 key 的 hash 值相同）
+因为 hash 值相同的概率不高，所以可以通过扩容的方式，来使得最终这些 key 的 hash 值在和新的数组长度取模之后，拆分到多个数组位置上。
+
+```java
+    final void treeifyBin(Node<K, V>[] tab, int hash) {
+        int n, index;
+        Node<K, V> e;
+        if (tab == null || (n = tab.length) < MIN_TREEIFY_CAPACITY) {
+            resize();
+        } else if ((e = tab[index = (n - 1) & hash]) != null) {
+            TreeNode<K, V> hd = null, tl = null;
+            do {
+                TreeNode<K, V> p = replacementTreeNode(e, null);
+                if (tl == null) {
+                    hd = p;
+                } else {
+                    p.prev = tl;
+                    tl.next = p;
+                }
+                tl = p;
+            } while ((e = e.next) != null);
+            if ((tab[index] = hd) != null) {
+                hd.treeify(tab);
+            }
+        }
+    }
+
+```
+
+## TreeNode（内部类）
+
+同时是树表也是链表
+
+```java
+    static final class TreeNode<K,V> extends LinkedHashMap.Entry<K,V> {}
+```
+
+###构造方法
+
+```java
+    TreeNode(int hash, K key, V val, Node<K,V> next) {
+        super(hash, key, val, next);
+    }
+```
+
 ### split
+
+因为数组已经扩容 2 倍了，树上的节点需要重新计算索引位置
+
+旧索引 index=has & (cap-1)
+
+新索引 index=has & (2cap-1) ==> (hash & cap)&((cap-1) &hash)
+
+如果新索引不变化的话，hash & cap===0 就表示索引位置不变
+新的索引也就比就索引多了一个 cap 的长度
+
+TreeNode 既是树表也是链表
+
+:::tip 重要
+
+- 为 0 时，将该节点头结点放到新数组的索引位置等于其在旧数组时的索引位置，记为低位链表头 loHead
+- 不等于 0 时，将该节点头结点放到新数组的索引位置等于其在旧数组时的索引位置再加上旧数组长度，记为高位链表头 hiHead
+
+:::
+
+[参考](https://blog.csdn.net/u010425839/article/details/106620440/)
 
 ```java
     final void split(HashMap<K,V> map, Node<K,V>[] tab, int index, int bit) {
@@ -398,15 +480,20 @@ with a parameter of about 0.5 on average for the default resizing threshold of 0
         TreeNode<K,V> loHead = null, loTail = null;
         TreeNode<K,V> hiHead = null, hiTail = null;
         int lc = 0, hc = 0;
+        // 这个for循环就是对从e节点开始对整个红黑树做遍历
         for (TreeNode<K,V> e = b, next; e != null; e = next) {
+            // 取e的下一节点赋值给next遍历
             next = (TreeNode<K,V>)e.next;
+            // 取好e的下一节点后，把它赋值为空，方便GC回收
             e.next = null;
             if ((e.hash & bit) == 0) {
+                // 索引位置不变时
                 if ((e.prev = loTail) == null)
                     loHead = e;
                 else
                     loTail.next = e;
                 loTail = e;
+                // 做个计数，看下拉出低位链表下会有几个元素
                 ++lc;
             }
             else {
@@ -415,26 +502,256 @@ with a parameter of about 0.5 on average for the default resizing threshold of 0
                 else
                     hiTail.next = e;
                 hiTail = e;
+                // 做个计数，看下拉出高位链表下会有几个元素
                 ++hc;
             }
         }
-
+        // 如果低位链表首节点不为null，说明有这个链表存在
         if (loHead != null) {
+            // 如果链表下的元素小于等于6
             if (lc <= UNTREEIFY_THRESHOLD)
+                //那就从红黑树转链表了，低位链表，迁移到新数组中下标不变，还是等于原数组到下标
                 tab[index] = loHead.untreeify(map);
             else {
+                // 低位链表，迁移到新数组中下标不变，还是等于原数组到下标，把低位链表整个拉到这个下标下，做个赋值
                 tab[index] = loHead;
+                 // 如果高位首节点不为空，说明原来的红黑树已经被拆分成两个链表了
                 if (hiHead != null) // (else is already treeified)
+                    // 那么就需要构建低位一个新的红黑树了
                     loHead.treeify(tab);
             }
         }
+        // 如果高位链表首节点不为null，说明有这个链表存在
         if (hiHead != null) {
+            // 如果链表下的元素小于等于6
             if (hc <= UNTREEIFY_THRESHOLD)
+                // 那就从红黑树转链表了，高位链表，迁移到新数组中的下标=【旧数组+旧数组长度】
                 tab[index + bit] = hiHead.untreeify(map);
             else {
+                // 高位链表，迁移到新数组中的下标=【旧数组+旧数组长度】
                 tab[index + bit] = hiHead;
                 if (loHead != null)
+                    // 如果低位首节点不为空，说明原来的红黑树已经被拆分成两个链表了
                     hiHead.treeify(tab);
+            }
+        }
+    }
+```
+
+### untreeify
+
+```java
+    final Node<K,V> untreeify(HashMap<K,V> map) {
+        // this是链表头节点
+        Node<K,V> hd = null, tl = null;
+        for (Node<K,V> q = this; q != null; q = q.next) {
+            // 将TreeNode 换成链表的 Node
+            Node<K,V> p = map.replacementNode(q, null);
+            if (tl == null)
+                hd = p;
+            else
+                tl.next = p;
+            tl = p;
+        }
+        return hd;
+    }
+```
+
+### treeify
+
+```java
+    final void treeify(Node<K,V>[] tab) {
+        TreeNode<K,V> root = null;
+        for (TreeNode<K,V> x = this, next; x != null; x = next) {
+            // 获取下个节点
+            next = (TreeNode<K,V>)x.next;
+            // 因为是重新生成树，所以 x的left，right都置空
+            x.left = x.right = null;
+            if (root == null) {
+                // 第一次root肯定是空
+                x.parent = null;
+                x.red = false;
+                root = x;
+            }
+            else {
+                // key值
+                K k = x.key;
+                // x节点的hash值
+                int h = x.hash;
+                Class<?> kc = null;
+                // 从根节点遍历插入节点
+                for (TreeNode<K,V> p = root;;) {
+                    // dir代表差值
+                    // ph代表父亲节点hash值
+                    int dir, ph;
+                    K pk = p.key;
+                    if ((ph = p.hash) > h)
+                        dir = -1;
+                    else if (ph < h)
+                        dir = 1;
+
+                    /*
+                     * 如果两个节点的key的hash值相等，那么还要通过其他方式再进行比较
+                     * 如果当前链表节点的key实现了comparable接口，并且当前树节点和链表节点是相同Class的实例，那么通过comparable的方式再比较两者。
+                     * 如果还是相等，最后再通过tieBreakOrder比较一次
+                     */
+                    else if ((kc == null &&
+                              (kc = comparableClassFor(k)) == null) ||
+                             (dir = compareComparables(kc, k, pk)) == 0)
+                        dir = tieBreakOrder(k, pk);
+                    // 保存当前树节点
+                    TreeNode<K,V> xp = p;
+                    if ((p = (dir <= 0) ? p.left : p.right) == null) {
+                        // 当前链表节点 作为 当前树节点的子节点
+                        x.parent = xp;
+                        if (dir <= 0)
+                            xp.left = x;
+                        else
+                            xp.right = x;
+                        // 插入节点之后需要调整红黑树平衡
+                        root = balanceInsertion(root, x);
+                        break;
+                    }
+                }
+            }
+        }
+        moveRootToFront(tab, root);
+    }
+
+```
+
+### balanceInsertion
+
+```java
+    static <K, V> TreeNode<K, V> balanceInsertion(TreeNode<K, V> root,
+                                                  TreeNode<K, V> x) {
+        // 插入节点默认为红色
+        x.red = true;
+        // 这里定义了4个变量
+        // xp：当前节点的父节点、xpp：爷爷节点、xppl：左叔叔节点、xppr：右叔叔节点
+        for (TreeNode<K, V> xp, xpp, xppl, xppr; ; ) {
+            // 如果父节点为空、说明当前没有根节点
+            if ((xp = x.parent) == null) {
+                x.red = false;
+                // 将x返回过去成为根节点
+                return x;
+            } else if (!xp.red || (xpp = xp.parent) == null) {
+                // 如果xp是根节点，不需要调整over
+                return root;
+            }
+            // 如果父节点是爷爷节点的左孩子
+            if (xp == (xppl = xpp.left)) {
+                // 爷爷的右子树不为空，并且是红色节点
+                if ((xppr = xpp.right) != null && xppr.red) {
+                    // 父亲和叔叔节点染黑，爷爷节点染红，指针回溯至爷爷节点接着调整
+                    xppr.red = false;
+                    xp.red = false;
+                    xpp.red = true;
+                    x = xpp;
+                } else {
+                    // 如果右叔叔为空 或者 为黑色
+                    if (x == xp.right) {
+                        // x节点是右子树
+                        // 将x的父节点进行左旋，指针x指向xp
+                        root = rotateLeft(root, x = xp);
+                        // 重新获取 xp,xpp节点
+                        xpp = (xp = x.parent) == null ? null : xp.parent;
+                    }
+                    // x，xp,xpp在一条线上了 ，xp染黑其余染红，右旋xpp
+                    if (xp != null) {
+                        xp.red = false;
+                        if (xpp != null) {
+                            xpp.red = true;
+                            root = rotateRight(root, xpp);
+                        }
+                    }
+                }
+            } else {
+                // 如果父节点是爷爷节点的右孩子
+                if (xppl != null && xppl.red) {
+                    xppl.red = false;
+                    xp.red = false;
+                    xpp.red = true;
+                    x = xpp;
+                } else {
+                    if (x == xp.left) {
+                        root = rotateRight(root, x = xp);
+                        xpp = (xp = x.parent) == null ? null : xp.parent;
+                    }
+                    if (xp != null) {
+                        xp.red = false;
+                        if (xpp != null) {
+                            xpp.red = true;
+                            root = rotateLeft(root, xpp);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+```
+
+### putTreeVal
+
+```java
+    final TreeNode<K, V> putTreeVal(HashMap<K, V> map, Node<K, V>[] tab,
+                                        int h, K k, V v) {
+        Class<?> kc = null;
+        // 是否找到节点标志
+        boolean searched = false;
+        TreeNode<K, V> root = (parent != null) ? root() : this;
+        for (TreeNode<K, V> p = root; ; ) {
+            int dir, ph;
+            K pk;
+            if ((ph = p.hash) > h) {
+                dir = -1;
+            } else if (ph < h) {
+                dir = 1;
+            } else if ((pk = p.key) == k || (k != null && k.equals(pk))) {
+                // 这里直接找到了节点
+                return p;
+            } else if ((kc == null &&
+                    (kc = comparableClassFor(k)) == null) ||
+                    (dir = compareComparables(kc, k, pk)) == 0) {
+                // 说明进入下面这个判断的条件是 hash相同 但是equal不同
+				// 没有实现Comparable<C>接口或者 实现该接口 并且 k与pk Comparable比较结果相同
+                if (!searched) {
+                    TreeNode<K, V> q, ch;
+                    searched = true;
+                    // 在左右子树递归的寻找 是否有key的hash相同  并且equals相同的节点
+                    if (((ch = p.left) != null &&
+                            (q = ch.find(h, k, kc)) != null) ||
+                            ((ch = p.right) != null &&
+                                    (q = ch.find(h, k, kc)) != null)) {
+                        // 找到了就返回
+                        return q;
+                    }
+                }
+                dir = tieBreakOrder(k, pk);
+            }
+            // 说明红黑树中没有与之equals相等的  那就必须进行插入操作
+            // 打破平衡的方法的 分出大小 结果 只有-1 1
+            // 到这里已经找到了要插入节点P
+            // 将xp指向p（父节点）
+            TreeNode<K, V> xp = p;
+            if ((p = (dir <= 0) ? p.left : p.right) == null) {
+                Node<K, V> xpn = xp.next;
+                // 实例化TreeNode
+                TreeNode<K, V> x = map.newTreeNode(h, k, v, xpn);
+                if (dir <= 0) {
+                    xp.left = x;
+                } else {
+                    xp.right = x;
+                }
+                // 连接前后，树父母关系
+                xp.next = x;
+                x.parent = x.prev = xp;
+                if (xpn != null) {
+                    ((TreeNode<K, V>) xpn).prev = x;
+                }
+                moveRootToFront(tab, balanceInsertion(root, x));
+                return null;
             }
         }
     }
