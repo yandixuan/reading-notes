@@ -9,9 +9,10 @@ const sidebar: SidebarConfig = {
       children: [
         '/guide/README.md',
         '/guide/ArrayDeque.md',
-        '/guide/HashMap.md',
-        '/guide/TreeMap.md',
         '/guide/ArrayList.md',
+        '/guide/TreeMap.md',
+        '/guide/HashMap.md',
+        '/guide/LinkedHashMap.md',
       ],
     },
   ],
