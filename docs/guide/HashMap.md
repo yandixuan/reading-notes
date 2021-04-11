@@ -435,6 +435,79 @@ MIN_TREEIFY_CAPACITY 默认值 64，对于这个值可以理解为：如果元�
 
 ```
 
+### removeNode（删除节点）
+
+```java
+    /**
+     * Implements Map.remove and related methods.
+     *
+     * @param hash hash for key
+     * @param key the key
+     * @param value the value to match if matchValue, else ignored
+     * @param matchValue if true only remove if value is equal
+     * @param movable if false do not move other nodes while removing
+     * @return the node, or null if none
+     */
+    final Node<K,V> removeNode(int hash, Object key, Object value,
+                               boolean matchValue, boolean movable) {
+        Node<K,V>[] tab; Node<K,V> p; int n, index;
+        // 如果table数组不为空 且 长度大于0 且 key所对应的节点对象不为空
+        if ((tab = table) != null && (n = tab.length) > 0 &&
+            // 顺便 tab指向table n指向数组长度 p指向节点对象
+            (p = tab[index = (n - 1) & hash]) != null) {
+            // 定义要返回node,下一个遍历节点e，key k，value v
+            Node<K,V> node = null, e; K k; V v;
+            // 如果当前节点的hash key 以及 key类型一致 将p赋值给node
+            if (p.hash == hash &&
+                ((k = p.key) == key || (key != null && key.equals(k))))
+                node = p;
+            // 如果e 不为空 那么就说明该hash值对应的节点已经拉链了
+            else if ((e = p.next) != null) {
+                // 如果 p 是 TreeNode的实例
+                if (p instanceof TreeNode)
+                    // TreeNode#getTreeNode获取node节点
+                    node = ((TreeNode<K,V>)p).getTreeNode(hash, key);
+                else {
+                    // 最后只能是链表了
+                    // 循环找链表
+                    do {
+                        if (e.hash == hash &&
+                            ((k = e.key) == key ||
+                             (key != null && key.equals(k)))) {
+                            node = e;
+                            break;
+                        }
+                        p = e;
+                    } while ((e = e.next) != null);
+                }
+            }
+            // 如果node 不为空 且 根据 matchValue 来判断是否需要值匹配 （值可能是对象也可能是基础类型）
+            if (node != null && (!matchValue || (v = node.value) == value ||
+                                 (value != null && value.equals(v)))) {
+                // 如果是TreeNode类型
+                if (node instanceof TreeNode)
+                    ((TreeNode<K,V>)node).removeTreeNode(this, tab, movable);
+                // 如果p就是Node 直接 tab[index]指向node.next 反正也是null
+                else if (node == p)
+                    tab[index] = node.next;
+                // 链表更简单 p.next指向node.next就行了
+                else
+                    p.next = node.next;
+                // 修改次数++
+                // size--
+                ++modCount;
+                --size;
+                // LinkedHashMap才会执行的方法，这里空实现
+                afterNodeRemoval(node);
+                // 返回node
+                return node;
+            }
+        }
+        // 返回null
+        return null;
+    }
+```
+
 ## TreeNode（内部类）
 
 同时是树表也是链表
@@ -754,5 +827,173 @@ TreeNode 既是树表也是链表
                 return null;
             }
         }
+    }
+```
+
+### removeTreeNode
+
+[参考](https://juejin.cn/post/6844903681003913223#heading-7)
+
+```java
+    // 删除树节点（节点同时是树表也是链表）
+    final void removeTreeNode(HashMap<K,V> map, Node<K,V>[] tab,
+                              boolean movable) {
+        // 定义数组长度n
+        int n;
+        // 如果数组空或者长度0即退出
+        if (tab == null || (n = tab.length) == 0)
+            return;
+        // 根据TreeNode的hash值算出它所在树的数组下标
+        int index = (n - 1) & hash;
+        /**
+         * first-头节点，数组存放数据索引位置存在存放的节点值
+         * root-根节点,红黑树的根节点，正常情况下二者是相等的
+         * rl-root节点的左孩子节点,succ-后节点,pred-前节点
+         */
+        TreeNode<K,V> first = (TreeNode<K,V>)tab[index], root = first, rl;
+        /**
+         * 维护双向链表（map在红黑树数据存储的过程中，除了维护红黑树之外还对双向链表进行了维护）
+         * 从链表中将该节点删除
+         * 如果前驱节点为空，说明删除节点是头节点，删除之后，头节点直接指向了删除节点的后继节点
+         */
+        TreeNode<K,V> succ = (TreeNode<K,V>)next, pred = prev;
+        if (pred == null)
+            // 如果pred是空，那么first指向succ tab[index] 也指向succ
+            tab[index] = first = succ;
+        else
+            // 否则 ped.next指向succ
+            pred.next = succ;
+        if (succ != null)
+            // 如果 succ不是空，修改succ的prev关系
+            succ.prev = pred;
+        // 如果头节点（即根节点）为空，说明该节点删除后，红黑树为空，直接返回
+        if (first == null)
+            return;
+        // 如果父节点不为空，说明删除后，调用root方法重新获取当前树的根节点
+        if (root.parent != null)
+            root = root.root();
+        /**
+         * 当以下三个条件任一满足时，当满足红黑树条件时，说明该位置元素的长度少于6（UNTREEIFY_THRESHOLD），需要对该位置元素链表化
+         * 1、root == null：根节点为空，树节点数量为0
+         * 2、root.right == null：右孩子为空，树节点数量最多为2
+         * 3、(rl = root.left) == null || rl.left == null)：
+         *      (rl = root.left) == null：左孩子为空，树节点数最多为2
+         *      rl.left == null：左孩子的左孩子为NULL，树节点数最多为6
+         */
+        if (root == null
+            || (movable
+                && (root.right == null
+                    || (rl = root.left) == null
+                    || rl.left == null))) {
+            // 链表化，因为前面对链表节点完成了删除操作，故在这里完成之后直接返回，即可完成节点的删除
+            tab[index] = first.untreeify(map);  // too small
+            return;
+        }
+        /**
+         * p-调用此方法的节点（待删除节点），pl-待删除节点的左子节点，pr-待删除节点的右子节点，replacement-替换节点
+         * 以下是对红黑树进行维护
+         */
+        TreeNode<K,V> p = this, pl = left, pr = right, replacement;
+        // 1、删除节点有两个子节点
+        if (pl != null && pr != null) {
+            // 第一步：找到当前节点的后继节点（注意与后驱节点的区别，值大于当前节点值的最小节点，以右子树为根节点，查找它对用的最左节点）
+            TreeNode<K,V> s = pr, sl;
+            while ((sl = s.left) != null) // find successor
+                s = sl;
+            // 第二步：交换后继节点和删除节点的颜色，最终的删除是删除后继节点，故平衡是否是以后继节点的颜色来
+            boolean c = s.red; s.red = p.red; p.red = c; // swap colors
+            // sr-后继节点的右孩子（后继节点是肯定不存在左孩子的，如果存在的话，那么它肯定不是后继节点）
+            TreeNode<K,V> sr = s.right;
+            // pp-待删除节点的父节点
+            TreeNode<K,V> pp = p.parent;
+            // 第三步：修改当前节点和后继节点的父节点
+            // 如果后继节点与当前节点的右孩子相等，类似于右孩子只有一个节点
+            if (s == pr) { // p was s's direct parent
+                // 交换两个节点的位置，父节点变子节点，子节点变父节点
+                p.parent = s;
+                s.right = p;
+            }
+            else {
+                // 待删除节点的右节点有左孩子
+                // 记录sp-后继节点的父节点
+                TreeNode<K,V> sp = s.parent;
+                // 互换p 和 后继节点s
+                //后继节点存在父节点，则让待删除节点替代后继节点
+                if ((p.parent = sp) != null) {
+                    // 如果后继节点是其父节点的左孩子，修改父节点左孩子值
+                    if (s == sp.left)
+                        sp.left = p;
+                    else
+                    // 如果后继节点是其父节点的右孩子，修改父节点右孩子值
+                        sp.right = p;
+                }
+                // 修改后继节点的右孩子值，如果不为null，同时指定其父节点的值(s是没有左节点的)
+                if ((s.right = pr) != null)
+                    pr.parent = s;
+            }
+            // 待删除节点左孩子为null
+            p.left = null;
+            // 后继节点存在右节点，则让其成为待删除节点的右节点
+            if ((p.right = sr) != null)
+                // 相对应，待删除节点成为其父节点
+                sr.parent = p;
+            //待删除节点存在左节点，则让其成为后继节点的左节点
+            if ((s.left = pl) != null)
+                // 相对应，后继节点成为其父节点
+                pl.parent = s;
+            // 待删除节点不存在父节点，则后继节点父节点为null
+            if ((s.parent = pp) == null)
+                // 后继节点成为根节点
+                root = s;
+            // 待删除节点存在父节点，且待删除节点是其左节点
+            else if (p == pp.left)
+                // 后继节点作为其左节点
+                pp.left = s;
+            else
+                // 后继节点作为其右节点
+                pp.right = s;
+            // 后继节点存在右节点，则替代节点为该节点
+            if (sr != null)
+                replacement = sr;
+            else
+                // 替代节点为待删除节点(等于未找到)
+                replacement = p;
+        }
+        // 待删除节点只有左节点
+        else if (pl != null)
+            replacement = pl;
+        // 待删除节点只有右节点
+        else if (pr != null)
+            replacement = pr;
+        else
+            // 待删除节点为叶子节点
+            replacement = p;
+        // 替代节点不为待删除节点，则先进行节点删除，然后进行平衡调整
+        if (replacement != p) {
+            TreeNode<K,V> pp = replacement.parent = p.parent;
+            if (pp == null)
+                root = replacement;
+            else if (p == pp.left)
+                pp.left = replacement;
+            else
+                pp.right = replacement;
+            p.left = p.right = p.parent = null;
+        }
+
+        TreeNode<K,V> r = p.red ? root : balanceDeletion(root, replacement);
+        // 替代节点为待删除节点，则先进行平衡调整，然后进行节点删除
+        if (replacement == p) {  // detach
+            TreeNode<K,V> pp = p.parent;
+            p.parent = null;
+            if (pp != null) {
+                if (p == pp.left)
+                    pp.left = null;
+                else if (p == pp.right)
+                    pp.right = null;
+            }
+        }
+        if (movable)
+            // 将红黑树根节点移动到数组索引位置
+            moveRootToFront(tab, r);
     }
 ```
