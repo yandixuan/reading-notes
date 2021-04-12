@@ -2,19 +2,21 @@ import type { UserConfig, DefaultThemeOptions } from 'vuepress';
 import type { SidebarConfig } from '@vuepress/theme-default';
 
 const sidebar: SidebarConfig = {
-  '/guide/': [
+  '/collection/': [
     {
       isGroup: true,
       text: 'Java8源码阅读',
       children: [
-        '/guide/README.md',
-        '/guide/ArrayDeque.md',
-        '/guide/ArrayList.md',
-        '/guide/TreeMap.md',
-        '/guide/HashMap.md',
-        '/guide/LinkedHashMap.md',
+        '/collection/ArrayDeque.md',
+        '/collection/ArrayList.md',
+        '/collection/TreeMap.md',
+        '/collection/HashMap.md',
+        '/collection/LinkedHashMap.md',
       ],
     },
+  ],
+  '/concurrent/': [
+    { isGroup: true, text: 'concurrent', children: ['/concurrent/RunnableFuture.md', '/concurrent/FutureTask.md'] },
   ],
 };
 
@@ -35,12 +37,12 @@ const config: UserConfig<DefaultThemeOptions> = {
     lastUpdated: true,
     navbar: [
       {
-        text: 'Guide',
-        link: '/guide/',
+        text: 'Collection',
+        link: '/collection/',
       },
       {
-        text: 'Config',
-        link: '/config/',
+        text: 'Concurrent',
+        link: '/concurrent/',
       },
       {
         text: 'VuePress',
