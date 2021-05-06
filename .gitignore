@@ -11,5 +11,11 @@ dist
 config.local.js
 basement_dist
 
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+
 .temp
 .cache
