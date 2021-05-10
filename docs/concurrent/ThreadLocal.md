@@ -13,6 +13,8 @@ ThreadLocal 是除了加锁这种同步方式之外的一种保证一种规避�
 
 ## 属性
 
+## 构造函数
+
 ## 内部类
 
 ThreadLocal 类用来设置线程私有变量 本身不储存值 主要提供自身引用 和 操作 ThreadLocalMap 属性值得方法，
@@ -33,6 +35,11 @@ d : 数组位置计算
 
 ### ThreadLocalMap
 
+ThreadLocalMap 是一个定制的哈希映射，仅适用于维护线程本地值。ThreadLocalMap 类是包私有的，允许在 Thread 类中声明字段。
+为了帮助处理非常大且长时间的使用，哈希表 entry 使用了对键的弱引用。有助于 GC 回收。
+
+但是，JDK 后面优化了设计方案，现时 JDK8 ThreadLocal 的设计是：每个 Thread 维护一个 ThreadLocalMap 哈希表，这个哈希表的 key 是 ThreadLocal 实例本身，value 才是真正要存储的值 Object。
+
 ```java
     static class ThreadLocalMap {
 
@@ -46,10 +53,11 @@ d : 数组位置计算
          */
 
         /**
-        * 定义Entry类继承 若引用
+        * 在ThreadLocalMap中，也是用Entry来保存K-V结构数据的。但是Entry中key只能是ThreadLocal对象，这点被Entry的构造方法已经限定死了
         *
-        * 当一个对象仅仅被weak reference（弱引用）指向, 而没有任何其他strong reference（强引用）指向的时候,
-        * 如果这时GC运行, 那么这个对象就会被回收，不论当前的内存空间是否足够，这个对象都会被回收。
+        *  Entry继承WeakReference,使用弱引用，可以将ThreadLocal对象的生命周期和线程生命周期解绑，持有对ThreadLocal的弱引用，可以使得ThreadLocal在没有其他强引用的时候被回收掉，
+        *  这样可以避免因为线程得不到销毁导致ThreadLocal对象无法被回收
+        *
         */
         static class Entry extends WeakReference<ThreadLocal<?>> {
             /** The value associated with this ThreadLocal. */
@@ -89,6 +97,7 @@ d : 数组位置计算
         /**
          * Set the resize threshold to maintain at worst a 2/3 load factor.
          */
+        // 负载因子为长度的2/3
         private void setThreshold(int len) {
             threshold = len * 2 / 3;
         }
@@ -108,15 +117,21 @@ d : 数组位置计算
         }
 
         /**
+         * 构造函数
          * Construct a new map initially containing (firstKey, firstValue).
          * ThreadLocalMaps are constructed lazily, so we only create
          * one when we have at least one entry to put in it.
          */
         ThreadLocalMap(ThreadLocal<?> firstKey, Object firstValue) {
+            // 初始化数组 容量 16
             table = new Entry[INITIAL_CAPACITY];
+            // 第一个key 根据hash散列出的数组下标
             int i = firstKey.threadLocalHashCode & (INITIAL_CAPACITY - 1);
+            // 将entry塞入数组
             table[i] = new Entry(firstKey, firstValue);
+            // size为1
             size = 1;
+            // 设置扩容阈值
             setThreshold(INITIAL_CAPACITY);
         }
 
@@ -210,18 +225,20 @@ d : 数组位置计算
 
             Entry[] tab = table;
             int len = tab.length;
+            // 根据哈希码和数组长度求元素放置的位置，即数组下标
             int i = key.threadLocalHashCode & (len-1);
-
+            // 循环tab 数组，如果 e 不为空说明hash冲突了，不断向后寻找 （开放寻址法）
             for (Entry e = tab[i];
                  e != null;
                  e = tab[i = nextIndex(i, len)]) {
+                 // 先进入循环内部，获取threadLocal
                 ThreadLocal<?> k = e.get();
-
+                // 如果 k与key是同一个对象，直接覆盖值结束
                 if (k == key) {
                     e.value = value;
                     return;
                 }
-
+                // 如果 k 为 null，用新key、value覆盖，同时清理历史key=null的陈旧数据
                 if (k == null) {
                     replaceStaleEntry(key, value, i);
                     return;
@@ -253,6 +270,7 @@ d : 数组位置计算
         }
 
         /**
+         * 替换 ThreadLocal 为null的 entry节点
          * Replace a stale entry encountered during a set operation
          * with an entry for the specified key.  The value passed in
          * the value parameter is stored in the entry, whether or not
@@ -269,6 +287,7 @@ d : 数组位置计算
          */
         private void replaceStaleEntry(ThreadLocal<?> key, Object value,
                                        int staleSlot) {
+            // staleSlot key为null的数组下标
             Entry[] tab = table;
             int len = tab.length;
             Entry e;
@@ -278,6 +297,7 @@ d : 数组位置计算
             // incremental rehashing due to garbage collector freeing
             // up refs in bunches (i.e., whenever the collector runs).
             int slotToExpunge = staleSlot;
+            // 向前扫描，查找最前的一个无效slot
             for (int i = prevIndex(staleSlot, len);
                  (e = tab[i]) != null;
                  i = prevIndex(i, len))
@@ -286,6 +306,7 @@ d : 数组位置计算
 
             // Find either the key or trailing null slot of run, whichever
             // occurs first
+            // 从staleSlot开始向后遍历table
             for (int i = nextIndex(staleSlot, len);
                  (e = tab[i]) != null;
                  i = nextIndex(i, len)) {
@@ -296,9 +317,10 @@ d : 数组位置计算
                 // The newly stale slot, or any other stale slot
                 // encountered above it, can then be sent to expungeStaleEntry
                 // to remove or rehash all of the other entries in run.
+                // 找到了key，将其与无效的slot交换
                 if (k == key) {
                     e.value = value;
-
+                    // 那么tab[i]指向null
                     tab[i] = tab[staleSlot];
                     tab[staleSlot] = e;
 
@@ -473,22 +495,26 @@ d : 数组位置计算
 
 ## 方法
 
+### set
+
+threadLocal 设置值
+
 ```java
 
-    public T get() {
+    public void set(T value) {
         // 获取当前线程
         Thread t = Thread.currentThread();
+        // 获取线程的 threadLocals 线程副本值
         ThreadLocalMap map = getMap(t);
-        if (map != null) {
-            ThreadLocalMap.Entry e = map.getEntry(this);
-            if (e != null) {
-                @SuppressWarnings("unchecked")
-                T result = (T)e.value;
-                return result;
-            }
-        }
-        return setInitialValue();
+
+        if (map != null)
+            // ThreadLocalMap不为空那么直接塞值
+            map.set(this, value);
+        else
+            // 否则进行初始化，调用createMap 从这里我们可以看出 ThreadLocalMap是延时初始化
+            createMap(t, value);
     }
+
 ```
 
 ### getMap
@@ -497,5 +523,37 @@ d : 数组位置计算
     // getMap 实际读取的是 线程的 threadLocals 变量 即 ThreadLocal.ThreadLocalMap
     ThreadLocalMap getMap(Thread t) {
         return t.threadLocals;
+    }
+```
+
+### createMap
+
+```java
+
+    void createMap(Thread t, T firstValue) {
+        // 调用构造函数进行初始化
+        t.threadLocals = new ThreadLocalMap(this, firstValue);
+    }
+```
+
+### get
+
+```java
+
+    public T get() {
+        // 获取当前线程
+        Thread t = Thread.currentThread();
+        // 获取线程的 threadLocals 线程副本值
+        ThreadLocalMap map = getMap(t);
+        if (map != null) {
+            // 线程副本不为空
+            ThreadLocalMap.Entry e = map.getEntry(this);
+            if (e != null) {
+                @SuppressWarnings("unchecked")
+                T result = (T)e.value;
+                return result;
+            }
+        }
+        return setInitialValue();
     }
 ```

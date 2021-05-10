@@ -16,7 +16,11 @@ const sidebar: SidebarConfig = {
     },
   ],
   '/concurrent/': [
-    { isGroup: true, text: 'concurrent', children: ['/concurrent/RunnableFuture.md', '/concurrent/FutureTask.md'] },
+    {
+      isGroup: true,
+      text: 'concurrent',
+      children: ['/concurrent/RunnableFuture.md', '/concurrent/FutureTask.md', '/concurrent/ThreadLocal.md'],
+    },
   ],
 };
 
