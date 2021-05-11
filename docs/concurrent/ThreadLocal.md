@@ -2,6 +2,8 @@
 
 [文章参考](https://www.cnblogs.com/micrari/p/6790229.html)
 
+[文章参考](https://blog.csdn.net/y4x5M0nivSrJaY3X92c/article/details/81124944)
+
 多线程访问同一个共享变量的时候容易出现并发问题，特别是多个线程对一个变量进行写入的时候，为了保证线程安全，
 一般使用者在访问共享变量的时候需要进行额外的同步措施才能保证线程安全性。
 ThreadLocal 是除了加锁这种同步方式之外的一种保证一种规避多线程访问出现线程不安全的方法，
@@ -24,14 +26,7 @@ ThreadLocal 类用来设置线程私有变量 本身不储存值 主要提供自
 目的：解决多线程使用共享对象的问题 空间换时间
 
 :::tip 提示
-a：和普通 Hashmap 类似存储在一个数组内，但与 hashmap 使用的拉链法解决散列冲突的是 ThreadLocalMap 使用开放地址法（开放地址法缺点 ： -空间利用率低 开发地址发会在散列冲突时寻找下一个可存入的槽点 为了避免冲突 负载因子会设置的相对较小）
-还使用的原因是 ThreadLocalMap 的散列值均匀 且经常增删 纯数组较方便 节点数量少 时也能节省掉指针域带来的空间开销
-
-b : 数组 初始容量 16，负载因子 2/3
-
-c : node 节点 的 key 封装了 WeakReference 用于回收
-
-d : 数组位置计算
+开放地址法缺点 ： 空间利用率低 开发地址发会在散列冲突时寻找下一个可存入的槽点 为了避免冲突 负载因子会设置的相对较小
 :::
 
 ### ThreadLocalMap
@@ -177,11 +172,14 @@ ThreadLocalMap 是一个定制的哈希映射，仅适用于维护线程本地�
          * @return the entry associated with key, or null if no such
          */
         private Entry getEntry(ThreadLocal<?> key) {
+            // 根据key这个ThreadLocal的ID来获取索引，也即哈希值
             int i = key.threadLocalHashCode & (table.length - 1);
             Entry e = table[i];
+            // 对应的entry存在且未失效且弱引用指向的ThreadLocal就是key，则命中返回
             if (e != null && e.get() == key)
                 return e;
             else
+                // 因为用的是线性探测，所以往后找还是有可能能够找到目标Entry的。
                 return getEntryAfterMiss(key, i, e);
         }
 
@@ -197,14 +195,17 @@ ThreadLocalMap 是一个定制的哈希映射，仅适用于维护线程本地�
         private Entry getEntryAfterMiss(ThreadLocal<?> key, int i, Entry e) {
             Entry[] tab = table;
             int len = tab.length;
-
+             // 基于线性探测法不断向后探测直到遇到空entry。
             while (e != null) {
                 ThreadLocal<?> k = e.get();
+                // 找到目标
                 if (k == key)
                     return e;
                 if (k == null)
+                    // 该entry对应的ThreadLocal已经被回收，调用expungeStaleEntry来清理一段连续无效的entry
                     expungeStaleEntry(i);
                 else
+                    // 环形意义下往后面走
                     i = nextIndex(i, len);
                 e = tab[i];
             }
@@ -239,7 +240,7 @@ ThreadLocalMap 是一个定制的哈希映射，仅适用于维护线程本地�
                     e.value = value;
                     return;
                 }
-                // 如果 entry 的 k 为 null，用新key、value覆盖，同时清理历史key=null的陈旧数据
+                // 替换失效的entry
                 if (k == null) {
                     replaceStaleEntry(key, value, i);
                     return;
@@ -298,7 +299,7 @@ ThreadLocalMap 是一个定制的哈希映射，仅适用于维护线程本地�
             // incremental rehashing due to garbage collector freeing
             // up refs in bunches (i.e., whenever the collector runs).
             int slotToExpunge = staleSlot;
-            // 向前扫描，查找最前的一个无效slot
+            // 向前扫描，查找最近的一个无效slot，位置标记为 slotToExpunge，如果扫描到空位置就停止循环
             for (int i = prevIndex(staleSlot, len);
                  (e = tab[i]) != null;
                  i = prevIndex(i, len))
@@ -307,7 +308,7 @@ ThreadLocalMap 是一个定制的哈希映射，仅适用于维护线程本地�
 
             // Find either the key or trailing null slot of run, whichever
             // occurs first
-            // 从staleSlot开始向后遍历table
+            // 从 staleSlot 向后遍历 table 扫描到空位置就停止循环
             for (int i = nextIndex(staleSlot, len);
                  (e = tab[i]) != null;
                  i = nextIndex(i, len)) {
@@ -332,7 +333,7 @@ ThreadLocalMap 是一个定制的哈希映射，仅适用于维护线程本地�
                     // 所以需要清理的位置是i,而不是传过来的staleSlot
                     if (slotToExpunge == staleSlot)
                         slotToExpunge = i;
-                    // 进行清理过期数据
+                    // 从slotToExpunge开始做一次连续段的清理，再做一次启发式清理
                     cleanSomeSlots(expungeStaleEntry(slotToExpunge), len);
                     return;
                 }
@@ -340,14 +341,15 @@ ThreadLocalMap 是一个定制的哈希映射，仅适用于维护线程本地�
                 // If we didn't find stale entry on backward scan, the
                 // first stale entry seen while scanning for key is the
                 // first still present in the run.
+                // 如果当前的slot已经无效，并且向前扫描过程中没有无效slot，则更新slotToExpunge为当前位置
                 if (k == null && slotToExpunge == staleSlot)
                     slotToExpunge = i;
             }
-
+            // 如果key在table中不存在，则在原地放一个即可
             // If key not found, put new entry in stale slot
             tab[staleSlot].value = null;
             tab[staleSlot] = new Entry(key, value);
-
+            // 在探测过程中如果发现任何无效slot，则做一次清理（连续段清理+启发式清理）
             // If there are any other stale entries in run, expunge them
             if (slotToExpunge != staleSlot)
                 cleanSomeSlots(expungeStaleEntry(slotToExpunge), len);
@@ -378,13 +380,13 @@ ThreadLocalMap 是一个定制的哈希映射，仅适用于维护线程本地�
             // Rehash until we encounter null
             Entry e;
             int i;
-            // 继续向后遍历，直到元素为 null
+            // 继续向后遍历，直到元素为 null则停止循环
             for (i = nextIndex(staleSlot, len);
                  (e = tab[i]) != null;
                  i = nextIndex(i, len)) {
                 ThreadLocal<?> k = e.get();
                 if (k == null) {
-                    // 这里设置为null ,方便让GC回收 value
+                    // 清理对应ThreadLocal已经被回收的entry，将强引用的value进行回收
                     e.value = null;
                     tab[i] = null;
                     size--;
@@ -401,12 +403,15 @@ ThreadLocalMap 是一个定制的哈希映射，仅适用于维护线程本地�
 
                         // Unlike Knuth 6.4 Algorithm R, we must scan until
                         // null because multiple entries could have been stale.
+                        // 这里 还真没弄懂 大致意思防止 具有相同哈希值的entry之间断开（中间有空entry）
+                        // 相同hash值的key不能断开 这应该是重点
                         while (tab[h] != null)
                             h = nextIndex(h, len);
                         tab[h] = e;
                     }
                 }
             }
+            // 返回staleSlot之后第一个空的slot索引
             return i;
         }
 
@@ -435,17 +440,26 @@ ThreadLocalMap 是一个定制的哈希映射，仅适用于维护线程本地�
          * @return true if any stale entries have been removed.
          */
         private boolean cleanSomeSlots(int i, int n) {
+            // i对应entry是非无效（指向的ThreadLocal没被回收，或者entry本身为空）
+            // n是用于控制控制扫描次数的
             boolean removed = false;
             Entry[] tab = table;
             int len = tab.length;
             do {
+                // 所以直接从下一个开始
                 i = nextIndex(i, len);
                 Entry e = tab[i];
+                // 发现key失效了
                 if (e != null && e.get() == null) {
+                    // 扩大次数
                     n = len;
+                    // 修改清理标志
                     removed = true;
+                    // 清理一个连续段
+                    // 清理之后返回的i又是一个null Entry
                     i = expungeStaleEntry(i);
                 }
+                // n除以2
             } while ( (n >>>= 1) != 0);
             return removed;
         }
@@ -456,14 +470,21 @@ ThreadLocalMap 是一个定制的哈希映射，仅适用于维护线程本地�
          * shrink the size of the table, double the table size.
          */
         private void rehash() {
+            // 做一次全量清理
             expungeStaleEntries();
 
+           /*
+            * 因为做了一次清理，所以size很可能会变小。
+            * ThreadLocalMap这里的实现是调低阈值来判断是否需要扩容，
+            * threshold默认为len*2/3，所以这里的threshold - threshold / 4相当于len/2
+            */
             // Use lower threshold for doubling to avoid hysteresis
             if (size >= threshold - threshold / 4)
                 resize();
         }
 
         /**
+         * 扩容，因为需要保证table的容量len为2的幂，所以扩容即扩大2倍
          * Double the capacity of the table.
          */
         private void resize() {
@@ -480,6 +501,7 @@ ThreadLocalMap 是一个定制的哈希映射，仅适用于维护线程本地�
                     if (k == null) {
                         e.value = null; // Help the GC
                     } else {
+                        // 线性探测来存放Entry
                         int h = k.threadLocalHashCode & (newLen - 1);
                         while (newTab[h] != null)
                             h = nextIndex(h, newLen);
@@ -488,7 +510,7 @@ ThreadLocalMap 是一个定制的哈希映射，仅适用于维护线程本地�
                     }
                 }
             }
-
+            // 设置新阈值、Entry容量，table
             setThreshold(newLen);
             size = count;
             table = newTab;
@@ -503,6 +525,7 @@ ThreadLocalMap 是一个定制的哈希映射，仅适用于维护线程本地�
             for (int j = 0; j < len; j++) {
                 Entry e = tab[j];
                 if (e != null && e.get() == null)
+                    // 又是把i所在连续段内所有无效slot都清理了一遍了
                     expungeStaleEntry(j);
             }
         }
