@@ -17,6 +17,43 @@ ThreadLocal 是除了加锁这种同步方式之外的一种保证一种规避�
 
 ## 属性
 
+简单说一下为什么用斐波那契散列方法呢？就是为了让存进去的值更加离散，为什么要让存进去的值，更加离散呢？目的是为了能更快找到存储位置，
+通过魔法值和 AtomicInteger 的 getAndAdd 方法得到 nextHashCode 再与 table 的长度做与操作
+threadLocalHashCode 方法最终调用的是 nextHashCode()方法。而 nextHashCode()方法如下面代码所示调用的是 getAndAdd，
+这个方法的作用是让当前线程的 nextHashCode 这个值与魔法值 HASH_INCREMENT 相加。每调用一次加一次魔法值。也就是线程中每添加一个 threadLocal，
+AtomicInteger 类型的 nextHashCode 值就会增加一个 HASH_INCREMENT。
+
+```java
+
+    /**
+     * ThreadLocals rely on per-thread linear-probe hash maps attached
+     * to each thread (Thread.threadLocals and
+     * inheritableThreadLocals).  The ThreadLocal objects act as keys,
+     * searched via threadLocalHashCode.  This is a custom hash code
+     * (useful only within ThreadLocalMaps) that eliminates collisions
+     * in the common case where consecutively constructed ThreadLocals
+     * are used by the same threads, while remaining well-behaved in
+     * less common cases.
+     */
+    private final int threadLocalHashCode = nextHashCode();
+
+    /**
+     * The next hash code to be given out. Updated atomically. Starts at
+     * zero.
+     */
+    private static AtomicInteger nextHashCode =
+        new AtomicInteger();
+
+    /**
+     * 0x61c88647对应的十进制为1640531527 通过理论与实践，当我们用0x61c88647作为魔数累加为每个ThreadLocal分配各自的ID也就是threadLocalHashCode再与2的幂取模，得到的结果分布很均匀。
+     * The difference between successively generated hash codes - turns
+     * implicit sequential thread-local IDs into near-optimally spread
+     * multiplicative hash values for power-of-two-sized tables.
+     */
+    private static final int HASH_INCREMENT = 0x61c88647;
+
+```
+
 ## 构造函数
 
 ## 内部类
