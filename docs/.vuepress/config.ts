@@ -19,7 +19,13 @@ const sidebar: SidebarConfig = {
     {
       isGroup: true,
       text: 'concurrent',
-      children: ['/concurrent/RunnableFuture.md', '/concurrent/FutureTask.md', '/concurrent/ThreadLocal.md'],
+      children: [
+        '/concurrent/RunnableFuture.md',
+        '/concurrent/FutureTask.md',
+        '/concurrent/ThreadLocal.md',
+        '/concurrent/InheritableThreadLocal.md',
+        '/concurrent/ConcurrentHashMap.md',
+      ],
     },
   ],
 };

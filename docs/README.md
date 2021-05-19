@@ -4,7 +4,7 @@ heroImage: /images/hero.png
 tagline:
 actions:
   - text: Get Started
-    link: /guide/README.md
+    link: /collection/README.md
     type: primary
 features:
   - title: Feature 1 Title
