@@ -27,11 +27,68 @@ Java 8 放弃了一个 HashMap 被一个 Segment 封装加上锁的复杂设计�
 
 ## 属性
 
+:::tip SizeCtl
+
+- 为 0 的时候代表表示还没有初始化
+- 在调用有参构造函数的时候，存放的是需要初始化的容量
+- 初始化之后表示下一次扩容的阈值
+
+:::
+
+### UNSAFE
+
 ```java
 
+// 获取obj对象中offset偏移地址对应的object型field的值,支持volatile load语义。
+public native Object getObjectVolatile(Object obj, long offset);
 
+// 获取数组中第一个元素的偏移量(get offset of a first element in the array)
+public native int arrayBaseOffset(java.lang.Class aClass);
 
+//获取数组中一个元素的大小(get size of an element in the array)
+public native int arrayIndexScale(java.lang.Class aClass);
 
+```
+
+```java
+
+    // Unsafe mechanics
+    private static final sun.misc.Unsafe U;
+    private static final long SIZECTL;
+    private static final long TRANSFERINDEX;
+    private static final long BASECOUNT;
+    private static final long CELLSBUSY;
+    private static final long CELLVALUE;
+    private static final long ABASE;
+    private static final int ASHIFT;
+
+    static {
+        try {
+            // 获取UNSAFE实例
+            U = sun.misc.Unsafe.getUnsafe();
+            // 获取 ConcurrentHashMap的Class对象
+            Class<?> k = ConcurrentHashMap.class;
+            SIZECTL = U.objectFieldOffset
+                (k.getDeclaredField("sizeCtl"));
+            TRANSFERINDEX = U.objectFieldOffset
+                (k.getDeclaredField("transferIndex"));
+            BASECOUNT = U.objectFieldOffset
+                (k.getDeclaredField("baseCount"));
+            CELLSBUSY = U.objectFieldOffset
+                (k.getDeclaredField("cellsBusy"));
+            Class<?> ck = CounterCell.class;
+            CELLVALUE = U.objectFieldOffset
+                (ck.getDeclaredField("value"));
+            Class<?> ak = Node[].class;
+            ABASE = U.arrayBaseOffset(ak);
+            int scale = U.arrayIndexScale(ak);
+            if ((scale & (scale - 1)) != 0)
+                throw new Error("data type scale not a power of two");
+            ASHIFT = 31 - Integer.numberOfLeadingZeros(scale);
+        } catch (Exception e) {
+            throw new Error(e);
+        }
+    }
 
 
 ```
@@ -62,8 +119,23 @@ Java 8 放弃了一个 HashMap 被一个 Segment 封装加上锁的复杂设计�
         int cap = ((initialCapacity >= (MAXIMUM_CAPACITY >>> 1)) ?
                    MAXIMUM_CAPACITY :
                    tableSizeFor(initialCapacity + (initialCapacity >>> 1) + 1));
-        // sizeCtl是用来记录当前数组的状态的（类似于HashMap中的threshold）
 
+        /**
+        * 其实传进来的容量实际上并不是存进去的桶的个数，而是需要扩容时的个数
+        * 16 * 0.75 = 12，在HashMap中，我们传进来的其实是16，需要乘负载因子后才是实际需要扩容时的阈值点
+        * 所以在构造器阶段需要除以负载因子，以此来求出真正的桶的个数，那也应该是数组容量 / 默认值的0.75啊
+        * 举个例子：
+        * 打个比方我们传进来的是22， 那么/ 0.75的方式结果是29.3，+1后再tableSizeFor结果是：32
+        * 而*1.5的方式结果是33，+1后再tableSizeFor结果是：64，那么可以看出1.5计算出的容量明细是不对的。明显多扩容了一倍
+        * 也确实这是一个bug 不过多扩容一倍也不会对使用产生多大的影响
+        */
+
+        /**
+        * 在JDK11中相应容量的代码也被修复了
+        * long size = (long) (1.0 + (long) initialCapacity / loadFactor);
+        */
+
+        // （类似于HashMap初始化时的threshold）存放初始容量
         this.sizeCtl = cap;
     }
 
@@ -75,13 +147,20 @@ Java 8 放弃了一个 HashMap 被一个 Segment 封装加上锁的复杂设计�
     public ConcurrentHashMap(int initialCapacity, float loadFactor) {
         this(initialCapacity, loadFactor, 1);
     }
-
+    /**
+    * @param initialCapacity 初始化的容量,通过位运算根据这个值计算出一个2的N次幂的值,来作为 hash buckets数组的size.
+    * @param loadFactor hash buckets的密度,根据这个值来确定是否需要扩容.默认0.75
+    * @param concurrencyLevel 并发更新线程的预估数量.默认1.
+    */
     public ConcurrentHashMap(int initialCapacity,
                              float loadFactor, int concurrencyLevel) {
+        // 验证参数有效性
         if (!(loadFactor > 0.0f) || initialCapacity < 0 || concurrencyLevel <= 0)
             throw new IllegalArgumentException();
+        // 如果初始容量小于并发等级 则初始容量为并发等级
         if (initialCapacity < concurrencyLevel)   // Use at least as many bins
             initialCapacity = concurrencyLevel;   // as estimated threads
+        // 因为小数会截断，所以+1
         long size = (long)(1.0 + (long)initialCapacity / loadFactor);
         int cap = (size >= (long)MAXIMUM_CAPACITY) ?
             MAXIMUM_CAPACITY : tableSizeFor((int)size);
@@ -92,3 +171,135 @@ Java 8 放弃了一个 HashMap 被一个 Segment 封装加上锁的复杂设计�
 ```
 
 ## 方法
+
+### putVal
+
+```java
+    final V putVal(K key, V value, boolean onlyIfAbsent) {
+        // 检验参数是否合法
+        if (key == null || value == null) throw new NullPointerException();
+        int hash = spread(key.hashCode());
+        int binCount = 0;
+        // 遍历Node数组
+        for (Node<K,V>[] tab = table;;) {
+            Node<K,V> f; int n, i, fh;
+            // 如果 table为空
+            if (tab == null || (n = tab.length) == 0)
+                // 初始化table
+                tab = initTable();
+            /**
+            * 这个地方为什么不直接用tab[i]来找元素呢？
+            * 虽然table数组本身是增加了volatile属性，但是“volatile的数组只针对数组的引用具有volatile的语义，而不是它的元素”。
+            * 所以如果有其他线程对这个数组的元素进行写操作，那么当前线程来读的时候不一定能读到最新的值。
+            */
+            else if ((f = tabAt(tab, i = (n - 1) & hash)) == null) {
+                if (casTabAt(tab, i, null,
+                             new Node<K,V>(hash, key, value, null)))
+                    break;                   // no lock when adding to empty bin
+            }
+            else if ((fh = f.hash) == MOVED)
+                tab = helpTransfer(tab, f);
+            else {
+                V oldVal = null;
+                synchronized (f) {
+                    if (tabAt(tab, i) == f) {
+                        if (fh >= 0) {
+                            binCount = 1;
+                            for (Node<K,V> e = f;; ++binCount) {
+                                K ek;
+                                if (e.hash == hash &&
+                                    ((ek = e.key) == key ||
+                                     (ek != null && key.equals(ek)))) {
+                                    oldVal = e.val;
+                                    if (!onlyIfAbsent)
+                                        e.val = value;
+                                    break;
+                                }
+                                Node<K,V> pred = e;
+                                if ((e = e.next) == null) {
+                                    pred.next = new Node<K,V>(hash, key,
+                                                              value, null);
+                                    break;
+                                }
+                            }
+                        }
+                        else if (f instanceof TreeBin) {
+                            Node<K,V> p;
+                            binCount = 2;
+                            if ((p = ((TreeBin<K,V>)f).putTreeVal(hash, key,
+                                                           value)) != null) {
+                                oldVal = p.val;
+                                if (!onlyIfAbsent)
+                                    p.val = value;
+                            }
+                        }
+                    }
+                }
+                if (binCount != 0) {
+                    if (binCount >= TREEIFY_THRESHOLD)
+                        treeifyBin(tab, i);
+                    if (oldVal != null)
+                        return oldVal;
+                    break;
+                }
+            }
+        }
+        addCount(1L, binCount);
+        return null;
+    }
+
+```
+
+### spread
+
+### initTable
+
+构造函数只是对 sizeCtl 进行了初始化，并没有对存放节点 Node 进行初始化，在该方法进行数组的初始化
+
+```javau
+
+    private final Node<K,V>[] initTable() {
+        Node<K,V>[] tab; int sc;
+        // 当table为空时就不停循环
+        while ((tab = table) == null || tab.length == 0) {
+            // 如果 sizeCtl小于0代表有其他线程正则执行 initTable 方法
+            if ((sc = sizeCtl) < 0)
+                // 线程主动让出CPU时间
+                Thread.yield(); // lost initialization race; just spin
+            // 如果 sizeCtl==0 通过CAS更新sizeCtl为-1如果成功说明该线程可以执行initTable方法进行初始化
+            else if (U.compareAndSwapInt(this, SIZECTL, sc, -1)) {
+                try {
+                    if ((tab = table) == null || tab.length == 0) {
+                        // 如果 sizeCtl>0 初始化大小为sizeCtl，否则初始化大小为16
+                        int n = (sc > 0) ? sc : DEFAULT_CAPACITY;
+                        @SuppressWarnings("unchecked")
+                        // 创建数组
+                        Node<K,V>[] nt = (Node<K,V>[])new Node<?,?>[n];
+                        // 赋值
+                        table = tab = nt;
+                        // 算出扩容阈值 sc*0.75
+                        sc = n - (n >>> 2);
+                    }
+                } finally {
+                    // 将下次扩容的阈值赋给 sizeCtl
+                    sizeCtl = sc;
+                }
+                // 结束循环
+                break;
+            }
+        }
+        // 返回数组
+        return tab;
+    }
+
+```
+
+### tabAt
+
+```java
+    static final <K,V> Node<K,V> tabAt(Node<K,V>[] tab, int i) {
+        return (Node<K,V>)U.getObjectVolatile(tab, ((long)i << ASHIFT) + ABASE);
+    }
+```
+
+### casTabAt
