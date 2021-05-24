@@ -79,11 +79,26 @@ public native int arrayIndexScale(java.lang.Class aClass);
             Class<?> ck = CounterCell.class;
             CELLVALUE = U.objectFieldOffset
                 (ck.getDeclaredField("value"));
+            // 获取Node的class对象，在ConcurrentHashMap中Node便是主要存储介质
             Class<?> ak = Node[].class;
+            /**
+            * 获取Node数组在内存中第一个元素的偏移位置,这部分偏移量等于对象头的长度
+            * 64位jdk，对象头： markword 8字节、class pointer 4字节（默认开启压缩）、arr length 4字节，所以ABASE=16
+            */
             ABASE = U.arrayBaseOffset(ak);
+            /**
+            * 获取数组中元素的增量地址，就是数组元素每个元素的空间大小，比如int，就是4
+            * 结合来使用 ABASE+i*scale就是每个元素对应的内存位置
+            */
             int scale = U.arrayIndexScale(ak);
             if ((scale & (scale - 1)) != 0)
                 throw new Error("data type scale not a power of two");
+            /**
+            * Integer.numberOfLeadingZeros 该方法的作用是返回无符号整型i的最高非零位前面的0的个数，包括符号位在内；
+            *
+            */
+
+
             ASHIFT = 31 - Integer.numberOfLeadingZeros(scale);
         } catch (Exception e) {
             throw new Error(e);
