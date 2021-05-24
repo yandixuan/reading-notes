@@ -91,19 +91,61 @@ public native int arrayIndexScale(java.lang.Class aClass);
             * 结合来使用 ABASE+i*scale就是每个元素对应的内存位置
             */
             int scale = U.arrayIndexScale(ak);
+            // 检验2的幂次方
             if ((scale & (scale - 1)) != 0)
                 throw new Error("data type scale not a power of two");
             /**
             * Integer.numberOfLeadingZeros 该方法的作用是返回无符号整型i的最高非零位前面的0的个数，包括符号位在内；
-            *
+            * ASHIFT也就是相应每个元素对应的长度 其实就是4 这里是用位移优化计算效率
+            * 为啥用31去减 因为scale的二进制前面（32-3也等同于index相减31-2）个0，从而得出偏移量 0100（10进制2）
+            * 数组寻址 数组寻址[i]位置地址 = 数组初始偏移+元素大小*i;(数组是连续的内存空间)
+            * 在这里就是 ABASE+i<<ASHIFT = ABASE+i*4 跟上面的寻址公式对应
             */
-
-
             ASHIFT = 31 - Integer.numberOfLeadingZeros(scale);
         } catch (Exception e) {
             throw new Error(e);
         }
     }
+
+```
+
+那么顺带我们也把 Integer.numberOfLeadingZeros 给分析下子
+
+#### 这一系列的判断，实际上是二分法的应用。
+
+如果 i 无符号右移 16 位等于 0 说明 那么说明最高非 0 的数在低 16 位，那么位数 n 可以先加 16 位（前面都是 0）,并且将 i 的低 16 位左移 16 位(这里我们发现规律相当于是把前面的 0 都移除掉了)
+
+如果 i 无符号右移 24 位等于 0 说明 那么说明最高非 0 的数在低 24 位，那么位数 n 可以先加 8 位 （前面都是 0）,并且将 i 的低 24 位左移 8 位(这里我们发现规律相当于是把前面的 0 都移除掉了)
+
+...
+
+后续依次类推
+
+最后我们处理到了 30 位，实际上是处理最后 2 位 无论是 01 还是 10 i 右移 31 位只剩 1 位，
+
+举个例子 10 右移 31 位 0....1 1+30-1=30 个 0
+
+举个例子 01 右移 31 位 0....0 1+30-0=31 个 0
+
+```java
+    /**
+    * 该方法的作用是返回无符号整型i的最高非零位前面的0的个数，包括符号位在内；
+    * 如果i为负数，这个方法将会返回0，符号位为1.
+    */
+    public static int numberOfLeadingZeros(int i) {
+        // HD, Figure 5-6
+        if (i == 0)
+            return 32;
+        int n = 1;
+        if (i >>> 16 == 0) { n += 16; i <<= 16; }
+        if (i >>> 24 == 0) { n +=  8; i <<=  8; }
+        if (i >>> 28 == 0) { n +=  4; i <<=  4; }
+        if (i >>> 30 == 0) { n +=  2; i <<=  2; }
+        n -= i >>> 31;
+        return n;
+    }
+
+
 
 
 ```
