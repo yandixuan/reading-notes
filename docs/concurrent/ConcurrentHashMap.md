@@ -27,6 +27,30 @@ Java 8 放弃了一个 HashMap 被一个 Segment 封装加上锁的复杂设计�
 
 ## 属性
 
+### MOVED
+
+forwarding nodes 节点的 hash 值，只有 table 发生扩容的时候，ForwardingNode 才会发挥作用，表示当前节点正处于 resize 的过程 (表示 map 正在扩容)
+
+```java
+    static final int MOVED     = -1; // hash for forwarding nodes
+```
+
+### nextTable
+
+resize 的时候使用
+
+```java
+    private transient volatile Node<K,V>[] nextTable;
+```
+
+### RESIZE_STAMP_BITS
+
+用来给 resizeStamp 调用生成一个和扩容有关的扩容戳
+
+```java
+    private static int RESIZE_STAMP_BITS = 16;
+```
+
 :::tip SizeCtl
 
 - 为 0 的时候代表表示还没有初始化
@@ -237,7 +261,7 @@ public native int arrayIndexScale(java.lang.Class aClass);
         if (key == null || value == null) throw new NullPointerException();
         int hash = spread(key.hashCode());
         int binCount = 0;
-        // 遍历Node数组
+        // 死循环
         for (Node<K,V>[] tab = table;;) {
             Node<K,V> f; int n, i, fh;
             // 如果 table为空
@@ -249,17 +273,25 @@ public native int arrayIndexScale(java.lang.Class aClass);
             * 虽然table数组本身是增加了volatile属性，但是“volatile的数组只针对数组的引用具有volatile的语义，而不是它的元素”。
             * 所以如果有其他线程对这个数组的元素进行写操作，那么当前线程来读的时候不一定能读到最新的值。
             */
+            // 如果通过CAS加载i对应位置的元素为null
             else if ((f = tabAt(tab, i = (n - 1) & hash)) == null) {
+                // CAS设置元素，true设置成功直接break循环
                 if (casTabAt(tab, i, null,
                              new Node<K,V>(hash, key, value, null)))
                     break;                   // no lock when adding to empty bin
             }
+            // 如果当前的桶的第一个元素是一个ForwardingNode节点，说明map正在扩容，则该线程尝试加入扩容
             else if ((fh = f.hash) == MOVED)
                 tab = helpTransfer(tab, f);
             else {
+                // 如果桶数组已经初始化好了，该扩容的也扩容了，并且根据哈希定位到的桶中已经有元素了,那么直接给桶进行加锁，
+                // 这里通过synchronized关键字进行实现
                 V oldVal = null;
                 synchronized (f) {
+                    // 双重检查，防止索引i对应的根节点f内存地址已经被其他线程修改
+                    // 扩容会更改桶根节点f的地址
                     if (tabAt(tab, i) == f) {
+                        // 如果根节点f的hash值
                         if (fh >= 0) {
                             binCount = 1;
                             for (Node<K,V> e = f;; ++binCount) {
@@ -307,13 +339,21 @@ public native int arrayIndexScale(java.lang.Class aClass);
 
 ```
 
-### spread
+### spread（计算 hash 值）
+
+(h ^ (h >>> 16))的作用就是让 hash 值 h 的高 16 与低 16 异或让值分布的更加散列减少冲突，那么 HASH_BITS 的作用是什么呢？
+
+```java
+    static final int spread(int h) {
+        return (h ^ (h >>> 16)) & HASH_BITS;
+    }
+```
 
 ### initTable
 
 构造函数只是对 sizeCtl 进行了初始化，并没有对存放节点 Node 进行初始化，在该方法进行数组的初始化
 
-```javau
+```java
 
     private final Node<K,V>[] initTable() {
         Node<K,V>[] tab; int sc;
@@ -354,9 +394,66 @@ public native int arrayIndexScale(java.lang.Class aClass);
 ### tabAt
 
 ```java
+    /**
+    * 强制从主存中加载对应i的数组元素，要求属性被volatile修饰，否则功能和getObject方法相同
+    */
     static final <K,V> Node<K,V> tabAt(Node<K,V>[] tab, int i) {
         return (Node<K,V>)U.getObjectVolatile(tab, ((long)i << ASHIFT) + ABASE);
     }
 ```
 
 ### casTabAt
+
+```java
+    /**
+    * CAS给Node数组设置值
+    */
+    static final <K,V> boolean casTabAt(Node<K,V>[] tab, int i,
+                                        Node<K,V> c, Node<K,V> v) {
+        return U.compareAndSwapObject(tab, ((long)i << ASHIFT) + ABASE, c, v);
+    }
+
+```
+
+### helpTransfer
+
+```java
+
+    final Node<K,V>[] helpTransfer(Node<K,V>[] tab, Node<K,V> f) {
+        Node<K,V>[] nextTab; int sc;
+        // 如果 table不是空且node节点是ForwardingNode类型（数据检验）
+        // 且 node 节点的 nextTable（新 table） 不是空（数据校验）
+        if (tab != null && (f instanceof ForwardingNode) &&
+            (nextTab = ((ForwardingNode<K,V>)f).nextTable) != null) {
+            // 算出扩容标志
+            int rs = resizeStamp(tab.length);
+            // 如果 nextTab 没有被并发修改 且 tab 也没有被并发修改
+            // 且 sizeCtl  < 0 （说明还在扩容）
+            while (nextTab == nextTable && table == tab &&
+                   (sc = sizeCtl) < 0) {
+                // TODO: 这里回来再分析
+                if ((sc >>> RESIZE_STAMP_SHIFT) != rs || sc == rs + 1 ||
+                    sc == rs + MAX_RESIZERS || transferIndex <= 0)
+                    break;
+                if (U.compareAndSwapInt(this, SIZECTL, sc, sc + 1)) {
+                    transfer(tab, nextTab);
+                    break;
+                }
+            }
+            return nextTab;
+        }
+        return table;
+    }
+
+
+```
+
+### resizeStamp （根据当前容量生成一个扩容标记）
+
+根据当前 tab 容量 n 非 0 最高为的 0 的个数与 1 左移 15 进行或运算得出
+
+```java
+ static final int resizeStamp(int n) {
+    return Integer.numberOfLeadingZeros(n) | (1 << (RESIZE_STAMP_BITS - 1));
+ }
+```
