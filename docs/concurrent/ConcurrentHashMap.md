@@ -240,44 +240,65 @@ TreeBin 并不是红黑树的存储节点，TreeBin 通过 root 属性维护红�
         TreeBin(TreeNode<K,V> b) {
             // TreeBin节点hash值为 TREEBIN 即-2
             super(TREEBIN, null, null, null);
+            // 链表起始节点为TreeNode b
             this.first = b;
+            // 根节点r置空
             TreeNode<K,V> r = null;
             for (TreeNode<K,V> x = b, next; x != null; x = next) {
+                // 先获取b的下一个节点
                 next = (TreeNode<K,V>)x.next;
+                // 将x的左右子节点强行置空
                 x.left = x.right = null;
+                // 条件成立：说明当前红黑树 是一个空树，那么设置插入元素 为根节点
                 if (r == null) {
                     x.parent = null;
+                    // 根节点为黑色
                     x.red = false;
                     r = x;
                 }
                 else {
+                    // 非第一次循环，都会进入else分支，此时红黑树已经有数据了
+                    // k 表示 插入节点的key
                     K k = x.key;
+                    // h 表示 插入节点的hash
                     int h = x.hash;
+                    // kc 表示 插入节点key的class类型
                     Class<?> kc = null;
+                    // 遍历红黑树插入节点
                     for (TreeNode<K,V> p = r;;) {
+                        // 临时遍历ph为被比较节点hash值
                         int dir, ph;
                         K pk = p.key;
+                        // 树节点左边
                         if ((ph = p.hash) > h)
                             dir = -1;
+                        // 树节点右边
                         else if (ph < h)
                             dir = 1;
+                        // 如果 插入节点的类型为null且 kc没有实现Comparable接口或 k与pk相同（也包含kc的class类为null或k,pk的clas类型不相同）任意满足其一
+                        // 的话都会根据2者的内存hashcode决定是树的左边还是右边
                         else if ((kc == null &&
                                   (kc = comparableClassFor(k)) == null) ||
                                  (dir = compareComparables(kc, k, pk)) == 0)
                             dir = tieBreakOrder(k, pk);
                             TreeNode<K,V> xp = p;
+                        // 如果p的左边、或右边没有子节点了那么么进行插入节点
                         if ((p = (dir <= 0) ? p.left : p.right) == null) {
+                            // 父子节点互相连接
                             x.parent = xp;
                             if (dir <= 0)
                                 xp.left = x;
                             else
                                 xp.right = x;
+                            // 插入的节点可能会破坏红黑树特性，调用插入调整方法
                             r = balanceInsertion(r, x);
+                            // 结束遍历红黑树的循环，继续遍历链表
                             break;
                         }
                     }
                 }
             }
+            // 将根节点设置成r
             this.root = r;
             assert checkInvariants(root);
         }
