@@ -209,11 +209,11 @@ TreeBin 并不是红黑树的存储节点，TreeBin 通过 root 属性维护红�
         // 锁状态标识
         volatile int lockState;
         // values for lockState
-        // 写锁
+        // 写锁 写是独占状态，以散列表来看，真正进入到TreeBin中的写线程 同一时刻 只有一个线程
         static final int WRITER = 1; // set while holding write lock
-        // 等待写锁
+        // 等待者状态（写线程在等待），当TreeBin中有读线程目前正在读取数据时，写线程无法修改数据
         static final int WAITER = 2; // set when waiting for write lock
-        // 读锁
+        // 读锁 读锁是共享，同一时刻可以有多个线程 同时进入到 TreeBin对象中获取数据
         static final int READER = 4; // increment value for setting read lock
 
         /**
@@ -300,6 +300,7 @@ TreeBin 并不是红黑树的存储节点，TreeBin 通过 root 属性维护红�
             }
             // 将根节点设置成r
             this.root = r;
+            // 递归检查红黑树的正确性（注意：assert关键字是受java启动项配置的，-ea 开启）
             assert checkInvariants(root);
         }
 
@@ -307,7 +308,9 @@ TreeBin 并不是红黑树的存储节点，TreeBin 通过 root 属性维护红�
          * Acquires write lock for tree restructuring.
          */
         private final void lockRoot() {
+            // 直接尝试CAS的将lockState从0变成WRITER（1）状态，即从没有锁变成获取了写锁的状态，只尝试一次，没有循环。
             if (!U.compareAndSwapInt(this, LOCKSTATE, 0, WRITER))
+                //如果 CAS失败，那么调用contendedLock方法，继续获取直到成功才返回
                 contendedLock(); // offload to separate method
         }
 
@@ -322,51 +325,97 @@ TreeBin 并不是红黑树的存储节点，TreeBin 通过 root 属性维护红�
          * Possibly blocks awaiting root lock.
          */
         private final void contendedLock() {
+            // 初始化一个waiting标志，默认为false，开启一个死循环
             boolean waiting = false;
             for (int s;;) {
+               /**
+                * 这里的 ~WAITER，即~2，即表示 -3 是一个固定值
+                *  2的二进制：0000 0000 0000 0000 0000 0000 0000 0010
+                * ~2的二进制：1111 1111 1111 1111 1111 1111 1111 1101（补码）
+                * 显然~2是负数，读取规则取反+1为
+                *           1000 0000 0000 0000 0000 0000 0000 0011（即-3）
+                * 这里只是告知 ~2==-3而已没有实际意义
+                * 因此 lockState为0(二进制数全是0)或者2(二进制数为10)时，lockState与 ~WAITER的结果才为 0（倒推法就可知）
+                * lockState为0时，表示没有任何线程获取任何锁；
+                * locKState为2时，表示只有一个写线程在等待获取锁，这也就是前面讲的find方法中，最后一个读线程释放了读锁并且还有写线程等待获取写锁的情况，实际上就是该线程
+                */
                 if (((s = lockState) & ~WAITER) == 0) {
                     if (U.compareAndSwapInt(this, LOCKSTATE, s, WRITER)) {
-                        if (waiting)
+                        //条件成立：说明写线程 抢占锁成功
+                         if (waiting)
+                            // 如果waiting标志位为true，那么将waiter清空，因为waiter是waiting为true时设置的，表示此时没有写线程在等待写锁
                             waiter = null;
                         return;
                     }
                 }
+                /**
+                 * 否则，判断 s & WAITER==0
+                 * WAITER固定为2
+                 * 如果s & WAITER为0，即需要s & 2 =0，那么s(lockState)必须为1或者大于2的数，比如4、8等等
+                 * 由于不存在写并发（外面对写操作加上了synchronized锁），因此lockState一定属于大于2的数，比如4、8等等
+                 * 这表示有线程获取到了读锁，此时写线程应该等待
+                 *
+                 */
                 else if ((s & WAITER) == 0) {
+                     // 尝试将lockState设置为s | WAITER  ，这里的s|WAITER就相当于s+WAITER，即将此时的lockState加上2，表示有写线程在等待获取写锁
                     if (U.compareAndSwapInt(this, LOCKSTATE, s, s | WAITER)) {
                         waiting = true;
+                        // waiter设置为当前线程
                         waiter = Thread.currentThread();
                     }
                 }
+                /**
+                 * 根据标志判断是否阻塞自己
+                 * 此时写线程不再继续执行代码，而是等待被唤醒
+                 * 如果被唤醒，那么可能是因为最后一个读锁也被释放了，或者是因为被中断，那么继续循环获取锁
+                 * 该循环的唯一出口就是获取到了写锁该循环的唯一出口就是获取到了写锁
+                 */
                 else if (waiting)
                     LockSupport.park(this);
             }
         }
 
         /**
+         * 读节点
          * Returns matching node or null if none. Tries to search
          * using tree comparisons from root, but continues linear
          * search when lock not available.
          */
         final Node<K,V> find(int h, Object k) {
+            // key首要条件不能null
             if (k != null) {
+                // 从first节点开始遍历，直到节点为null才停止循环
                 for (Node<K,V> e = first; e != null; ) {
                     int s; K ek;
+                    // WAITER|WRITER 等同于 WAITER+WRITER=1+2=3 ==>0011
+                    // lockState & 0011 != 0 条件成立：说明当前TreeBin 有写等待线程 或者 写操作线程正在加锁
                     if (((s = lockState) & (WAITER|WRITER)) != 0) {
+                        // 找到key直接返回e
                         if (e.hash == h &&
                             ((ek = e.key) == k || (ek != null && k.equals(ek))))
                             return e;
+                        // 无法读树那么就根据链表结构依次读取，好处就是不会阻塞读取的过程
                         e = e.next;
                     }
+                    // 前置条件：当前TreeBin中 写等待线程 或者 写线程 都没有
+                    // 条件成立：说明添加读锁成功 每个线程都会给 LOCKSTATE+4
                     else if (U.compareAndSwapInt(this, LOCKSTATE, s,
                                                  s + READER)) {
+                        // 获取到读锁，那么就从根节点遍历，TreeBin只是封装了锁，实际上找数据节点还是委托给了TreeNode来找
                         TreeNode<K,V> r, p;
                         try {
                             p = ((r = root) == null ? null :
                                  r.findTreeNode(h, k, null));
                         } finally {
                             Thread w;
+                            // U.getAndAddInt(this, LOCKSTATE, -READER) == (READER|WAITER)
+                            // 1.当前线程查询红黑树结束，释放当前线程的读锁 就是让 lockstate 值 - 4
+                            // (READER|WAITER) = 0110 => 表示当前只有一个线程在读，且“有一个写线程在等待”
+                            // 当前读线程为 TreeBin中的最后一个读线程。
+                            // getAndAddInt含义是返回当前值，并不是修改值所以进入if的是最后一个读线程了，所以我们要唤醒等待写线程了
                             if (U.getAndAddInt(this, LOCKSTATE, -READER) ==
                                 (READER|WAITER) && (w = waiter) != null)
+                                // 如果是最后一个读线程，并且有写线程因为读锁而阻塞，要告诉写线程可以尝试获取写锁了。
                                 LockSupport.unpark(w);
                         }
                         return p;
@@ -423,10 +472,13 @@ TreeBin 并不是红黑树的存储节点，TreeBin 通过 root 属性维护红�
                     if (!xp.red)
                         x.red = true;
                     else {
+                        // 在这里准备插入节点，给根节点加锁
                         lockRoot();
                         try {
+                            // 插入平衡调整完后，重新赋值root节点，可能在调整的过程中根节点发生了变化
                             root = balanceInsertion(root, x);
                         } finally {
+                            // 解锁根节点
                             unlockRoot();
                         }
                     }
@@ -448,6 +500,8 @@ TreeBin 并不是红黑树的存储节点，TreeBin 通过 root 属性维护红�
          * @return true if now too small, so should be untreeified
          */
         final boolean removeTreeNode(TreeNode<K,V> p) {
+            // 读过HashMap的我们知道，TreeNode 即包含树关系也包含链表关系
+            // 那么unlink节点p在链表中的关系
             TreeNode<K,V> next = (TreeNode<K,V>)p.next;
             TreeNode<K,V> pred = p.prev;  // unlink traversal pointers
             TreeNode<K,V> r, rl;
@@ -464,6 +518,8 @@ TreeBin 并不是红黑树的存储节点，TreeBin 通过 root 属性维护红�
             if ((r = root) == null || r.right == null || // too small
                 (rl = r.left) == null || rl.left == null)
                 return true;
+            // 一旦上面进入return true的分支说明节点过少，树要退化为链表
+            // 锁住树的根节点，删除节点跟HashMap流程一致没啥好说的
             lockRoot();
             try {
                 TreeNode<K,V> replacement;
@@ -753,13 +809,15 @@ TreeBin 并不是红黑树的存储节点，TreeBin 通过 root 属性维护红�
                 return false;
             return true;
         }
-
+        // Unsafe实例
         private static final sun.misc.Unsafe U;
+        // lockState在内存中的偏移量
         private static final long LOCKSTATE;
         static {
             try {
                 U = sun.misc.Unsafe.getUnsafe();
                 Class<?> k = TreeBin.class;
+                // 获取偏移量
                 LOCKSTATE = U.objectFieldOffset
                     (k.getDeclaredField("lockState"));
             } catch (Exception e) {
