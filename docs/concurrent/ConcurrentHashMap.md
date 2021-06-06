@@ -973,24 +973,29 @@ TreeBin 并不是红黑树的存储节点，TreeBin 通过 root 属性维护红�
                                 }
                             }
                         }
-                        // 如果f节点是TreeBin类型
+                        // 如果f节点是TreeBin类型，TreeBin的hash是负数
                         else if (f instanceof TreeBin) {
                             Node<K,V> p;
                             binCount = 2;
+                            // 调用 TreeBin的putTreeVal方法
                             if ((p = ((TreeBin<K,V>)f).putTreeVal(hash, key,
                                                            value)) != null) {
                                 oldVal = p.val;
+                                // putIfAbsent不会进入下面分支
                                 if (!onlyIfAbsent)
                                     p.val = value;
                             }
                         }
                     }
                 }
+                // binCount前提条件不等于0
                 if (binCount != 0) {
+                    // 如果 binCount大于链表转树的节点个数阈值
                     if (binCount >= TREEIFY_THRESHOLD)
                         treeifyBin(tab, i);
                     if (oldVal != null)
                         return oldVal;
+                    // 退出循环
                     break;
                 }
             }
@@ -1119,3 +1124,106 @@ TreeBin 并不是红黑树的存储节点，TreeBin 通过 root 属性维护红�
     return Integer.numberOfLeadingZeros(n) | (1 << (RESIZE_STAMP_BITS - 1));
  }
 ```
+
+### treeifyBin
+
+```java
+
+    private final void treeifyBin(Node<K,V>[] tab, int index) {
+        // n:数组长度
+        Node<K,V> b; int n, sc;
+        if (tab != null) {
+            // 如果桶的数量小于64，那么不需要链表转树表，没必要，直接扩容数组
+            if ((n = tab.length) < MIN_TREEIFY_CAPACITY)
+                tryPresize(n << 1);
+            // 否则cas获取tab对应index的桶的根元素
+            else if ((b = tabAt(tab, index)) != null && b.hash >= 0) {
+                // 对于两边转树表的代码代码块进行synchronized加锁
+                synchronized (b) {
+                    // 双重检查，确定b是否还是index对应桶的根元素
+                    if (tabAt(tab, index) == b) {
+                        TreeNode<K,V> hd = null, tl = null;
+                        for (Node<K,V> e = b; e != null; e = e.next) {
+                            TreeNode<K,V> p =
+                                new TreeNode<K,V>(e.hash, e.key, e.val,
+                                                  null, null);
+                            if ((p.prev = tl) == null)
+                                hd = p;
+                            else
+                                tl.next = p;
+                            tl = p;
+                        }
+                        setTabAt(tab, index, new TreeBin<K,V>(hd));
+                    }
+                }
+            }
+        }
+    }
+
+```
+
+### tryPresize
+
+tryPreSize 是 ConcurrentHashMap 扩容方法之一
+
+```java
+
+    private final void tryPresize(int size) {
+        // 如果大小为MAXIMUM_CAPACITY最大总量的一半，那么直接扩容为MAXIMUM_CAPACITY，否则计算最小幂次方
+        int c = (size >= (MAXIMUM_CAPACITY >>> 1)) ? MAXIMUM_CAPACITY :
+            tableSizeFor(size + (size >>> 1) + 1);
+        int sc;
+        // 如果sizeCtl为负数说明在其它地方进行了扩容，所以这里的条件是非负数
+        while ((sc = sizeCtl) >= 0) {
+            Node<K,V>[] tab = table; int n;
+            // 如果table还未进行初始化
+            if (tab == null || (n = tab.length) == 0) {
+                n = (sc > c) ? sc : c;
+                // cas修改sizeCtl为-1，表示table正在进行初始化
+                if (U.compareAndSwapInt(this, SIZECTL, sc, -1)) {
+                    try {
+                        // 确认其他线程没有对table修改
+                        if (table == tab) {
+                            @SuppressWarnings("unchecked")
+                            Node<K,V>[] nt = (Node<K,V>[])new Node<?,?>[n];
+                            table = nt;
+                            // 等价于0.75*n
+                            sc = n - (n >>> 2);
+                        }
+                    } finally {
+                        // 将扩容后的阈值赋值给sizeCtl
+                        sizeCtl = sc;
+                    }
+                }
+            }
+            // 如果扩容大小没有达到阈值，或者超过最大容量
+            else if (c <= sc || n >= MAXIMUM_CAPACITY)
+                // 退出循环
+                break;
+            // 确认其他线程没有对table修改
+            else if (tab == table) {
+                // 根据table的长度生成扩容戳
+                int rs = resizeStamp(n);
+                if (sc < 0) {
+                    Node<K,V>[] nt;
+                   /**
+                    * 1.sc 右移 16位 是否和当前容量生成的扩容戳相同，相同则代是在同一容量下进行的扩容
+                    * 2.第二个和第三个判断 判断当前帮助扩容线程数是否已达到MAX_RESIZERS最大扩容线程数
+                    * 3.第四个和第五个判断 为了确保transfer()方法初始化完毕
+                    */
+                    if ((sc >>> RESIZE_STAMP_SHIFT) != rs || sc == rs + 1 ||
+                        sc == rs + MAX_RESIZERS || (nt = nextTable) == null ||
+                        transferIndex <= 0)
+                        break;
+                    if (U.compareAndSwapInt(this, SIZECTL, sc, sc + 1))
+                        transfer(tab, nt);
+                }
+                else if (U.compareAndSwapInt(this, SIZECTL, sc,
+                                             (rs << RESIZE_STAMP_SHIFT) + 2))
+                    transfer(tab, null);
+            }
+        }
+    }
+```
+
+### addCount
