@@ -56,7 +56,7 @@ const config: UserConfig<DefaultThemeOptions> = {
       },
       {
         text: 'VuePress',
-        link: 'https://v1.vuepress.vuejs.org',
+        link: 'https://github.com/vuepress/vuepress-next',
       },
     ],
     sidebar: sidebar,
