@@ -257,7 +257,7 @@
 
 ### handlePossibleCancellationInterrupt
 
-这里线程只是被打上了中断标记，一直
+这里线程只是被打上了中断标记
 
 ```java
     private void handlePossibleCancellationInterrupt(int s) {
