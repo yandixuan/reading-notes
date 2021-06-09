@@ -1445,3 +1445,185 @@ tryPreSize 是 ConcurrentHashMap 扩容方法之一
 ```
 
 ### addCount
+
+[文章参考](https://blog.csdn.net/every__day/article/details/115030000)
+我觉得这篇解释的很好了
+
+计数总逻辑，通过 CounterCell 或是 baseCount，来保证多线程环境下计数问题。
+
+- 无竞争条件下，执行 put() 方法时，操作 baseCount 实现计数
+- 首次竞争条件下，执行 put()方法，会初始化 CounterCell ，并实现计数
+- CounterCell 一旦初始化，计数就优先使用 CounterCell
+- 每个线程，要么修改 CounterCell 、要么修改 baseCount，实现计数
+- CounterCell 在竞争特别严重时，会扩容。（扩容上限与 CPU 核数有关，不会一直扩容）
+
+```java
+
+    private final void addCount(long x, int check) {
+        CounterCell[] as; long b, s;
+        // 如果计数盒子不是空 或者 如果修改 baseCount 失败
+        if ((as = counterCells) != null ||
+            !U.compareAndSwapLong(this, BASECOUNT, b = baseCount, s = b + x)) {
+            CounterCell a; long v; int m;
+            boolean uncontended = true;
+            // 如果计数盒子是空（尚未出现并发）
+            // 如果随机取余一个数组位置为空 或者
+            // 修改这个槽位的变量失败（出现并发了）
+            // 执行 fullAddCount 方法。并结束
+            if (as == null || (m = as.length - 1) < 0 ||
+                (a = as[ThreadLocalRandom.getProbe() & m]) == null ||
+                !(uncontended =
+                  U.compareAndSwapLong(a, CELLVALUE, v = a.value, v + x))) {
+                fullAddCount(x, uncontended);
+                return;
+            }
+            if (check <= 1)
+                return;
+            s = sumCount();
+        }
+        // 检查是否需要扩容，在 putVal 方法调用时，默认就是要检查的
+        if (check >= 0) {
+            Node<K,V>[] tab, nt; int n, sc;
+            while (s >= (long)(sc = sizeCtl) && (tab = table) != null &&
+                   (n = tab.length) < MAXIMUM_CAPACITY) {
+                int rs = resizeStamp(n);
+                // 说明正在进行扩容
+                if (sc < 0) {
+                    // 扩容戳不一致，扩容结束，扩容线程达到最大，nextTable为空，transferIndex扩容下标为负数直接结束循环
+                    if ((sc >>> RESIZE_STAMP_SHIFT) != rs || sc == rs + 1 ||
+                        sc == rs + MAX_RESIZERS || (nt = nextTable) == null ||
+                        transferIndex <= 0)
+                        break;
+                    // cas设置成功，说明可以参与扩容
+                    if (U.compareAndSwapInt(this, SIZECTL, sc, sc + 1))
+                        transfer(tab, nt);
+                }
+                // 没有线程在扩容，作为扩容的发起方
+                else if (U.compareAndSwapInt(this, SIZECTL, sc,
+                                             (rs << RESIZE_STAMP_SHIFT) + 2))
+                    transfer(tab, null);
+                s = sumCount();
+            }
+        }
+    }
+
+```
+
+### fullAddCount
+
+```java
+
+    private final void fullAddCount(long x, boolean wasUncontended) {
+        int h;
+        if ((h = ThreadLocalRandom.getProbe()) == 0) {
+            ThreadLocalRandom.localInit();      // force initialization
+            h = ThreadLocalRandom.getProbe();
+            wasUncontended = true;
+        }
+        boolean collide = false;                // True if last slot nonempty
+        for (;;) {
+            CounterCell[] as; CounterCell a; int n; long v;
+            if ((as = counterCells) != null && (n = as.length) > 0) {
+                if ((a = as[(n - 1) & h]) == null) {
+                    if (cellsBusy == 0) {            // Try to attach new Cell
+                        CounterCell r = new CounterCell(x); // Optimistic create
+                        if (cellsBusy == 0 &&
+                            U.compareAndSwapInt(this, CELLSBUSY, 0, 1)) {
+                            boolean created = false;
+                            try {               // Recheck under lock
+                                CounterCell[] rs; int m, j;
+                                if ((rs = counterCells) != null &&
+                                    (m = rs.length) > 0 &&
+                                    rs[j = (m - 1) & h] == null) {
+                                    rs[j] = r;
+                                    created = true;
+                                }
+                            } finally {
+                                cellsBusy = 0;
+                            }
+                            if (created)
+                                break;
+                            continue;           // Slot is now non-empty
+                        }
+                    }
+                    collide = false;
+                }
+                else if (!wasUncontended)       // CAS already known to fail
+                    wasUncontended = true;      // Continue after rehash
+                else if (U.compareAndSwapLong(a, CELLVALUE, v = a.value, v + x))
+                    break;
+                // 这个地方很巧妙，当 counterCells比 NCPU大时，已经没必要扩容，NCPU决定了同时最多只有NCPU个线程在
+                // counterCells中写值，所以将扩容标志设置成false，本次线程不用扩容了counterCells
+                else if (counterCells != as || n >= NCPU)
+                    collide = false;            // At max size or stale
+                else if (!collide)
+                    collide = true;
+                // cas  cellsBusy状态0->1 成功，那么就进行2倍扩容
+                else if (cellsBusy == 0 &&
+                         U.compareAndSwapInt(this, CELLSBUSY, 0, 1)) {
+                    try {
+                        if (counterCells == as) {// Expand table unless stale
+                            CounterCell[] rs = new CounterCell[n << 1];
+                            for (int i = 0; i < n; ++i)
+                                rs[i] = as[i];
+                            counterCells = rs;
+                        }
+                    } finally {
+                        cellsBusy = 0;
+                    }
+                    collide = false;
+                    continue;                   // Retry with expanded table
+                }
+                // 扩容了之后rehash下，重新生成
+                h = ThreadLocalRandom.advanceProbe(h);
+            }
+            else if (cellsBusy == 0 && counterCells == as &&
+                     U.compareAndSwapInt(this, CELLSBUSY, 0, 1)) {
+                boolean init = false;
+                try {                           // Initialize table
+                    if (counterCells == as) {
+                        CounterCell[] rs = new CounterCell[2];
+                        rs[h & 1] = new CounterCell(x);
+                        counterCells = rs;
+                        init = true;
+                    }
+                } finally {
+                    cellsBusy = 0;
+                }
+                if (init)
+                    break;
+            }
+            // cas修改BASECOUNT，成功之后结束循环
+            else if (U.compareAndSwapLong(this, BASECOUNT, v = baseCount, v + x))
+                break;                          // Fall back on using base
+        }
+    }
+
+```
+
+### get（无锁查询 Map）
+
+```java
+
+     public V get(Object key) {
+        Node<K,V>[] tab; Node<K,V> e, p; int n, eh; K ek;
+        int h = spread(key.hashCode());
+        if ((tab = table) != null && (n = tab.length) > 0 &&
+            (e = tabAt(tab, (n - 1) & h)) != null) {
+            if ((eh = e.hash) == h) {
+                if ((ek = e.key) == key || (ek != null && key.equals(ek)))
+                    return e.val;
+            }
+            // eh<0,这代表是TreeBin,调用TreeBin#find（之前分析过了TreeBin里有读写锁，写数据才会阻塞，而读是不会的）
+            else if (eh < 0)
+                return (p = e.find(h, key)) != null ? p.val : null;
+            // 循环链表寻找节点
+            while ((e = e.next) != null) {
+                if (e.hash == h &&
+                    ((ek = e.key) == key || (ek != null && key.equals(ek))))
+                    return e.val;
+            }
+        }
+        return null;
+    }
+```
