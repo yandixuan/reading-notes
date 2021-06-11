@@ -203,18 +203,25 @@ ThreadPoolExecute 和 ForkJoinPool 继承 AbstractExecutorService 就可以减�
 
         public <T> List<Future<T>> invokeAll(Collection<? extends Callable<T>> tasks)
             throws InterruptedException {
+            // 对集合判空
             if (tasks == null)
                 throw new NullPointerException();
+            // 根据task长度创建相应长度的Future列表
             ArrayList<Future<T>> futures = new ArrayList<Future<T>>(tasks.size());
+            // 完成标志
             boolean done = false;
             try {
+                // 遍历集合
                 for (Callable<T> t : tasks) {
+                    // 封装Callable为FutureTask
                     RunnableFuture<T> f = newTaskFor(t);
                     futures.add(f);
+                    // 线程池执行FutureTask
                     execute(f);
                 }
                 for (int i = 0, size = futures.size(); i < size; i++) {
                     Future<T> f = futures.get(i);
+                    // 判断任务是否完成，没完成阻塞获取
                     if (!f.isDone()) {
                         try {
                             f.get();
@@ -223,11 +230,14 @@ ThreadPoolExecute 和 ForkJoinPool 继承 AbstractExecutorService 就可以减�
                         }
                     }
                 }
+                // 修改标志
                 done = true;
                 return futures;
             } finally {
+                // 如果标志没有修改
                 if (!done)
                     for (int i = 0, size = futures.size(); i < size; i++)
+                        // 取消任务，只是打上中断标记
                         futures.get(i).cancel(true);
             }
         }
@@ -237,6 +247,7 @@ ThreadPoolExecute 和 ForkJoinPool 继承 AbstractExecutorService 就可以减�
             throws InterruptedException {
             if (tasks == null)
                 throw new NullPointerException();
+            // 根据单位换算成纳秒
             long nanos = unit.toNanos(timeout);
             ArrayList<Future<T>> futures = new ArrayList<Future<T>>(tasks.size());
             boolean done = false;
@@ -251,15 +262,19 @@ ThreadPoolExecute 和 ForkJoinPool 继承 AbstractExecutorService 就可以减�
                 // executor doesn't have any/much parallelism.
                 for (int i = 0; i < size; i++) {
                     execute((Runnable)futures.get(i));
+                    // 每次计算距离截止时间还有多少纳秒
                     nanos = deadline - System.nanoTime();
                     if (nanos <= 0L)
+                        // 时间到了直接返回
                         return futures;
                 }
 
                 for (int i = 0; i < size; i++) {
                     Future<T> f = futures.get(i);
+                    // 没有完成阻塞当前线程直到获取结果
                     if (!f.isDone()) {
                         if (nanos <= 0L)
+                            // 时间到了直接返回
                             return futures;
                         try {
                             f.get(nanos, TimeUnit.NANOSECONDS);
@@ -268,14 +283,17 @@ ThreadPoolExecute 和 ForkJoinPool 继承 AbstractExecutorService 就可以减�
                         } catch (TimeoutException toe) {
                             return futures;
                         }
+                        // 计算距离截止时间还有多久
                         nanos = deadline - System.nanoTime();
                     }
                 }
                 done = true;
                 return futures;
             } finally {
+                // 完成标志false
                 if (!done)
                     for (int i = 0, size = futures.size(); i < size; i++)
+                        // 取消任务
                         futures.get(i).cancel(true);
             }
         }
