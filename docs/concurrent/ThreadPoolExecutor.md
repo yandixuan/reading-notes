@@ -2,6 +2,100 @@
 
 ## 内部类
 
+Worker 继承了 AbstractQueuedSynchronizer（AQS）实现了 Runnable（即可被线程运行）
+
+### Worker
+
+```java
+
+    private final class Worker
+        extends AbstractQueuedSynchronizer
+        implements Runnable
+    {
+        /**
+         * This class will never be serialized, but we provide a
+         * serialVersionUID to suppress a javac warning.
+         */
+        private static final long serialVersionUID = 6138294804551838833L;
+
+        /** Thread this worker is running in.  Null if factory fails. */
+        // Worker运行所在的线程上
+        final Thread thread;
+        /** Initial task to run.  Possibly null. */
+        // Worker所运行的任务，构造函数初始化赋值的
+        Runnable firstTask;
+        /** Per-thread task counter */
+        volatile long completedTasks;
+
+        /**
+         * Creates with given first task and thread from ThreadFactory.
+         * @param firstTask the first task (null if none)
+         */
+        Worker(Runnable firstTask) {
+            // 设置AQS状态为-1
+            setState(-1); // inhibit interrupts until runWorker
+            // 赋值
+            this.firstTask = firstTask;
+            // ThreadFactory产生线程，并且赋值给thread变量
+            this.thread = getThreadFactory().newThread(this);
+        }
+
+        /** Delegates main run loop to outer runWorker  */
+        /**
+         * run方法代理给runWorker执行
+         */
+        public void run() {
+            runWorker(this);
+        }
+
+        // Lock methods
+        //
+        // The value 0 represents the unlocked state.
+        // The value 1 represents the locked state.
+        /**
+         * 是否独占，当状态为1的时候为上锁状态
+         */
+        protected boolean isHeldExclusively() {
+            return getState() != 0;
+        }
+
+        protected boolean tryAcquire(int unused) {
+            // 通过cas尝试将状态由0->1
+            if (compareAndSetState(0, 1)) {
+                // 设置独占锁对应的线程也就是当前线程
+                setExclusiveOwnerThread(Thread.currentThread());
+                return true;
+            }
+            // 获取失败
+            return false;
+        }
+
+        protected boolean tryRelease(int unused) {
+            // 释放独占锁的线程
+            setExclusiveOwnerThread(null);
+            // 状态置于0
+            setState(0);
+            // 释放成功
+            return true;
+        }
+
+        public void lock()        { acquire(1); }
+        public boolean tryLock()  { return tryAcquire(1); }
+        public void unlock()      { release(1); }
+        public boolean isLocked() { return isHeldExclusively(); }
+
+        void interruptIfStarted() {
+            Thread t;
+            if (getState() >= 0 && (t = thread) != null && !t.isInterrupted()) {
+                try {
+                    t.interrupt();
+                } catch (SecurityException ignore) {
+                }
+            }
+        }
+    }
+```
+
 ## 属性
 
 ### ctl
@@ -90,6 +184,14 @@ keepAliveTime 是线程池中空闲线程等待工作的超时时间。
 
 ```java
     private volatile int maximumPoolSize;
+```
+
+### workers
+
+工作线程的集合
+
+```java
+    private final HashSet<Worker> workers = new HashSet<Worker>();
 ```
 
 ## 构造函数
@@ -295,44 +397,132 @@ keepAliveTime 是线程池中空闲线程等待工作的超时时间。
                 // else CAS failed due to workerCount change; retry inner loop
             }
         }
-
+        // 工作线程开始工作标志
         boolean workerStarted = false;
+        // 是否加入了工作者集合
         boolean workerAdded = false;
         Worker w = null;
         try {
+            // new一个Worker实例
             w = new Worker(firstTask);
+            // 获取worker对应的线程
             final Thread t = w.thread;
+            // 判断线程不能为空
             if (t != null) {
                 final ReentrantLock mainLock = this.mainLock;
+                // 加锁
                 mainLock.lock();
                 try {
                     // Recheck while holding lock.
                     // Back out on ThreadFactory failure or if
                     // shut down before lock acquired.
+                    // 获取最新的线程池状态
                     int rs = runStateOf(ctl.get());
-
+                    // 如果线程状态为运行状态
+                    // 或者
+                    // 线程池状态为SHUTDOWN，并且firstTask等于空
                     if (rs < SHUTDOWN ||
                         (rs == SHUTDOWN && firstTask == null)) {
+                        // 如果线程在活动中，抛出异常
                         if (t.isAlive()) // precheck that t is startable
                             throw new IllegalThreadStateException();
+                        // 添加到集合
                         workers.add(w);
+                        // 获取工作者集合数量
                         int s = workers.size();
                         if (s > largestPoolSize)
+                            // 更新largestPoolSize
                             largestPoolSize = s;
+                        // 添加到工作者集合标志true
                         workerAdded = true;
                     }
                 } finally {
+                    // 释放锁
                     mainLock.unlock();
                 }
+                // 判断是否添加成功
                 if (workerAdded) {
+                    // 启动线程
                     t.start();
+                    // 工作标志true
                     workerStarted = true;
                 }
             }
         } finally {
+            // 如果线程没有启动说明线程状态至少大于SHUTDOWN了
             if (! workerStarted)
                 addWorkerFailed(w);
         }
         return workerStarted;
+    }
+```
+
+### addWorkerFailed
+
+```java
+
+    private void addWorkerFailed(Worker w) {
+        final ReentrantLock mainLock = this.mainLock;
+        mainLock.lock();
+        try {
+            if (w != null)
+                workers.remove(w);
+            // 循环执行CAS操作直到让workerCount数量减少1
+            decrementWorkerCount();
+            // 执行tryTerminate方法
+            tryTerminate();
+        } finally {
+            mainLock.unlock();
+        }
+    }
+
+```
+
+### decrementWorkerCount
+
+```java
+
+    private void decrementWorkerCount() {
+        do {} while (! compareAndDecrementWorkerCount(ctl.get()));
+    }
+```
+
+### tryTerminate
+
+尝试结束线程池
+
+```java
+
+    final void tryTerminate() {
+        // 死循环
+        for (;;) {
+            // 获取控制状态
+            int c = ctl.get();
+            if (isRunning(c) ||
+                runStateAtLeast(c, TIDYING) ||
+                (runStateOf(c) == SHUTDOWN && ! workQueue.isEmpty()))
+                return;
+            if (workerCountOf(c) != 0) { // Eligible to terminate
+                interruptIdleWorkers(ONLY_ONE);
+                return;
+            }
+
+            final ReentrantLock mainLock = this.mainLock;
+            mainLock.lock();
+            try {
+                if (ctl.compareAndSet(c, ctlOf(TIDYING, 0))) {
+                    try {
+                        terminated();
+                    } finally {
+                        ctl.set(ctlOf(TERMINATED, 0));
+                        termination.signalAll();
+                    }
+                    return;
+                }
+            } finally {
+                mainLock.unlock();
+            }
+            // else retry on failed CAS
+        }
     }
 ```
