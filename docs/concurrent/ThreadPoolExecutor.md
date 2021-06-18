@@ -1,5 +1,7 @@
 # ThreadPoolExecutor
 
+[文章参考](https://www.cnblogs.com/trust-freedom/p/6693601.html#label_1_2)
+
 ## 内部类
 
 Worker 继承了 AbstractQueuedSynchronizer（AQS）实现了 Runnable（即可被线程运行）
@@ -335,13 +337,28 @@ keepAliveTime 是线程池中空闲线程等待工作的超时时间。
             // 再次更新 c
             c = ctl.get();
         }
+        /**
+         * 工作线程数量大于等于corePoolSize，但是 workQueue能添加任务
+         */
         if (isRunning(c) && workQueue.offer(command)) {
+            // 再次检查线程池状态
             int recheck = ctl.get();
+            // 如果其他线程引起了线程池状态的变更，至少不是运行状态，
+            // 工作队列删除任务，并且尝试结束线程池
             if (! isRunning(recheck) && remove(command))
+                // 根据拒绝策略，拒绝任务
                 reject(command);
+            // 如果当前worker数量为0，通过addWorker(null, false)创建一个线程，其任务为null
+            // 为什么只检查运行的worker数量是不是0呢？？ 为什么不和corePoolSize比较呢？？
+            // 只保证有一个worker线程可以从queue中获取任务执行就行了？？
+            // 因为只要还有活动的worker线程，就可以消费workerQueue中的任务
             else if (workerCountOf(recheck) == 0)
                 addWorker(null, false);
         }
+        /**
+         * 3、如果线程池不是running状态 或者 无法入队列
+         *   尝试开启新线程，扩容至maxPoolSize，如果addWork(command, false)失败了，拒绝当前command
+         */
         else if (!addWorker(command, false))
             reject(command);
     }
@@ -459,6 +476,8 @@ keepAliveTime 是线程池中空闲线程等待工作的超时时间。
 
 ### addWorkerFailed
 
+可能是因为线程池的状态影响到了工作线程的加入，所以会尝试结束线程池生命周期
+
 ```java
 
     private void addWorkerFailed(Worker w) {
@@ -498,23 +517,47 @@ keepAliveTime 是线程池中空闲线程等待工作的超时时间。
         for (;;) {
             // 获取控制状态
             int c = ctl.get();
+            /**
+             * 线程池是否需要终止
+             * 如果以下3中情况任一为true，return，不进行终止
+             * 1、还在运行状态
+             * 2、状态是TIDYING、或 TERMINATED，已经终止过了
+             * 3、SHUTDOWN 且 workQueue不为空
+             */
             if (isRunning(c) ||
                 runStateAtLeast(c, TIDYING) ||
                 (runStateOf(c) == SHUTDOWN && ! workQueue.isEmpty()))
                 return;
+
+            /**
+             * 只有shutdown状态 且 workQueue为空，或者 stop状态能执行到这一步
+             * 如果此时线程池还有线程（正在运行任务，正在等待任务）
+             * 中断唤醒一个正在等任务的空闲worker
+             * 唤醒后再次判断线程池状态，会return null，进入processWorkerExit()流程
+             */
             if (workerCountOf(c) != 0) { // Eligible to terminate
+                // 中断workers集合中的空闲任务，参数为true，只中断一个
                 interruptIdleWorkers(ONLY_ONE);
                 return;
             }
-
+            /**
+             * 如果状态是SHUTDOWN，workQueue也为空了，正在运行的worker也没有了，开始terminated
+             */
             final ReentrantLock mainLock = this.mainLock;
             mainLock.lock();
             try {
+                /**
+                 * CAS将线程池的ctl变成TIDYING（所有的任务被终止，workCount为0，为此状态时将会调用terminated()方法），
+                 * 期间ctl有变化就会失败，会再次for循环
+                 */
                 if (ctl.compareAndSet(c, ctlOf(TIDYING, 0))) {
                     try {
+                        // 需子类实现
                         terminated();
                     } finally {
+                        // 将线程池的ctl变成TERMINATED
                         ctl.set(ctlOf(TERMINATED, 0));
+                        // 唤醒调用了 等待线程池终止的线程 awaitTermination()
                         termination.signalAll();
                     }
                     return;
@@ -523,6 +566,124 @@ keepAliveTime 是线程池中空闲线程等待工作的超时时间。
                 mainLock.unlock();
             }
             // else retry on failed CAS
+        }
+    }
+```
+
+```java
+     /**
+      * onlyOne：true 只会中断第一个worker然后退出循环
+      */
+     private void interruptIdleWorkers(boolean onlyOne) {
+        final ReentrantLock mainLock = this.mainLock;
+        mainLock.lock();
+        try {
+            for (Worker w : workers) {
+                Thread t = w.thread;
+                // 线程没有被打上终端标志，并且能获取到锁，说明当前worker没有执行任务
+                if (!t.isInterrupted() && w.tryLock()) {
+                    try {
+                        t.interrupt();
+                    } catch (SecurityException ignore) {
+                    } finally {
+                        // 释放锁
+                        w.unlock();
+                    }
+                }
+                if (onlyOne)
+                    // 退出循环
+                    break;
+            }
+        } finally {
+            mainLock.unlock();
+        }
+    }
+
+
+```
+
+### shutdown
+
+温柔的终止线程池
+
+```java
+
+    public void shutdown() {
+        final ReentrantLock mainLock = this.mainLock;
+        mainLock.lock();
+        try {
+            // 判断调用者是否有权限shutdown线程池
+            checkShutdownAccess();
+            // CAS+循环设置线程池状态为shutdown
+            advanceRunState(SHUTDOWN);
+            // 中断所有空闲线程
+            interruptIdleWorkers();
+            onShutdown(); // hook for ScheduledThreadPoolExecutor
+        } finally {
+            mainLock.unlock();
+        }
+        // 尝试终止线程池
+        tryTerminate();
+    }
+```
+
+### shutdownNow
+
+强硬的终止线程池
+
+```java
+
+    public List<Runnable> shutdownNow() {
+        List<Runnable> tasks;
+        final ReentrantLock mainLock = this.mainLock;
+        mainLock.lock();
+        try {
+            // 判断调用者是否有权限shutdown线程池
+            checkShutdownAccess();
+            // CAS+循环设置线程池状态为stop
+            advanceRunState(STOP);
+            // 中断所有线程，包括正在运行任务的
+            interruptWorkers();
+            // 将workQueue中的元素放入一个List并返回
+            tasks = drainQueue();
+        } finally {
+            mainLock.unlock();
+        }
+        // 尝试终止线程池
+        tryTerminate();
+        // 返回workQueue中未执行的任务
+        return tasks;
+    }
+
+```
+
+### awaitTermination
+
+等待线程池终止
+
+```java
+
+    public boolean awaitTermination(long timeout, TimeUnit unit)
+        throws InterruptedException {
+        // 转换时间（以纳秒为单位）
+        long nanos = unit.toNanos(timeout);
+        final ReentrantLock mainLock = this.mainLock;
+        mainLock.lock();
+        try {
+            // 死循环
+            for (;;) {
+                // 这个状态是优先判断，因为可以忽略timeout的影响
+                // 状态大于等于 TERMINATED 直接返回true
+                if (runStateAtLeast(ctl.get(), TERMINATED))
+                    return true;
+                // 如果nanos小于等于0，直接返回fasle
+                if (nanos <= 0)
+                    return false;
+                // 当前线程阻塞等待nanos纳秒，暂时释放，singal之后恢复锁的拥有权
+                nanos = termination.awaitNanos(nanos);
+            }
+        } finally {
+            mainLock.unlock();
         }
     }
 ```
