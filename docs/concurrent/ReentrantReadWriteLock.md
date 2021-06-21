@@ -1,5 +1,7 @@
 # ReentrantReadWriteLock
 
+[文章参考](https://blog.csdn.net/fxkcsdn/article/details/82217760)
+
 ## 内部类
 
 ### Sync
@@ -32,7 +34,7 @@ sharedCount 和 exclusiveCount 一般不会同时不为 0，只有当线程占�
         // 读锁计数，当前持有读锁的线程数
         static int sharedCount(int c)    { return c >>> SHARED_SHIFT; }
         /** Returns the number of exclusive holds represented in count  */
-        // 写锁的计数，也就是它的重入次数
+        // 写锁的计数，也就是它的重入次数（与低16位1111...与运算，也就是重入次数）
         static int exclusiveCount(int c) { return c & EXCLUSIVE_MASK; }
 
         /**
@@ -52,6 +54,12 @@ sharedCount 和 exclusiveCount 一般不会同时不为 0，只有当线程占�
          * ThreadLocal subclass. Easiest to explicitly define for sake
          * of deserialization mechanics.
          */
+        /**
+         * 重写的目的就是为了放置get为null
+         * 采用继承是为了重写 initialValue 方法，这样就不用进行这样的处理：
+         * 如果ThreadLocal没有当前线程的计数，则new一个，再放进ThreadLocal里。
+         * 可以直接调用 get。
+         */
         static final class ThreadLocalHoldCounter
             extends ThreadLocal<HoldCounter> {
             public HoldCounter initialValue() {
@@ -63,6 +71,9 @@ sharedCount 和 exclusiveCount 一般不会同时不为 0，只有当线程占�
          * The number of reentrant read locks held by current thread.
          * Initialized only in constructor and readObject.
          * Removed whenever a thread's read hold count drops to 0.
+         */
+        /**
+         * 保存当前线程重入读锁的次数的容器。在读锁重入次数为 0 时移除。
          */
         private transient ThreadLocalHoldCounter readHolds;
 
@@ -79,6 +90,12 @@ sharedCount 和 exclusiveCount 一般不会同时不为 0，只有当线程占�
          *
          * <p>Accessed via a benign data race; relies on the memory
          * model's final field and out-of-thin-air guarantees.
+         */
+        /**
+         * 最近一个成功获取读锁的线程的计数。这省却了ThreadLocal查找，
+         * 通常情况下，下一个释放线程是最后一个获取线程。这不是 volatile 的，
+         * 因为它仅用于试探的，线程进行缓存也是可以的
+         * （因为判断是否是当前线程是通过线程id来比较的）。
          */
         private transient HoldCounter cachedHoldCounter;
 
@@ -146,6 +163,9 @@ sharedCount 和 exclusiveCount 一般不会同时不为 0，只有当线程占�
             return free;
         }
 
+        /**
+         * 获取写锁的实现
+         */
         protected final boolean tryAcquire(int acquires) {
             /*
              * Walkthrough:
@@ -158,11 +178,17 @@ sharedCount 和 exclusiveCount 一般不会同时不为 0，只有当线程占�
              *    queue policy allows it. If so, update state
              *    and set owner.
              */
+            // 获取当前线程
             Thread current = Thread.currentThread();
+            // 获取同步状态
             int c = getState();
+            // 获取写锁的重入次数
             int w = exclusiveCount(c);
+            // 当前被读锁占用
             if (c != 0) {
                 // (Note: if c != 0 and w == 0 then shared count != 0)
+                // c != 0 && w==0 说明写锁为0，读锁不为0，由于读写互斥，那么获取写锁失败 return fasle
+                // c !=0  && current != getExclusiveOwnerThread() 说明写锁不为0，但是当前线程不是独占线程，即写写互斥，return fasle
                 if (w == 0 || current != getExclusiveOwnerThread())
                     return false;
                 if (w + exclusiveCount(acquires) > MAX_COUNT)
