@@ -28,6 +28,7 @@ const sidebar: SidebarConfig = {
         '/concurrent/ExecutorService.md',
         '/concurrent/AbstractExecutorService.md',
         '/concurrent/ThreadPoolExecutor.md',
+        '/concurrent/ReentrantReadWriteLock.md',
       ],
     },
   ],

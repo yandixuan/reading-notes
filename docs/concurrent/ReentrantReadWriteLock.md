@@ -1,6 +1,6 @@
 # ReentrantReadWriteLock
 
-[文章参考](https://blog.csdn.net/fxkcsdn/article/details/82217760)
+[文章参考](https://www.cnblogs.com/huangrenhui/p/12738046.html)
 
 ## 内部类
 
@@ -153,11 +153,15 @@ sharedCount 和 exclusiveCount 一般不会同时不为 0，只有当线程占�
          */
 
         protected final boolean tryRelease(int releases) {
+            // 当前线程是否是锁的占有者
             if (!isHeldExclusively())
                 throw new IllegalMonitorStateException();
+            // 减值
             int nextc = getState() - releases;
+            // 是否释放锁的标志
             boolean free = exclusiveCount(nextc) == 0;
             if (free)
+                // 将占有线程清空
                 setExclusiveOwnerThread(null);
             setState(nextc);
             return free;
@@ -184,22 +188,29 @@ sharedCount 和 exclusiveCount 一般不会同时不为 0，只有当线程占�
             int c = getState();
             // 获取写锁的重入次数
             int w = exclusiveCount(c);
-            // 当前被读锁占用
+            // 锁状态不为0
             if (c != 0) {
                 // (Note: if c != 0 and w == 0 then shared count != 0)
-                // c != 0 && w==0 说明写锁为0，读锁不为0，由于读写互斥，那么获取写锁失败 return fasle
-                // c !=0  && current != getExclusiveOwnerThread() 说明写锁不为0，但是当前线程不是独占线程，即写写互斥，return fasle
+                /*
+                 * 1. c != 0 && w==0 说明写锁为0，读锁不为0，由于读写互斥，那么获取写锁失败 return fasle
+                 * 2. c !=0  && current != getExclusiveOwnerThread() 说明写锁不为0，但是当前线程不是独占线程，即写写互斥，return fasle
+                 */
                 if (w == 0 || current != getExclusiveOwnerThread())
                     return false;
+                // 如果写锁重入次数大于最大值，抛异常
                 if (w + exclusiveCount(acquires) > MAX_COUNT)
                     throw new Error("Maximum lock count exceeded");
+                // 获取写锁，增加状态值
                 // Reentrant acquire
                 setState(c + acquires);
                 return true;
             }
+            // writerShouldBlock判断当前是否应该阻塞，同时CAS设置同步状态，设置失败说明获取锁失败
+            // writerShouldBlock的实现，便是公平与非公平的核心实现
             if (writerShouldBlock() ||
                 !compareAndSetState(c, c + acquires))
                 return false;
+            // 当前线程为锁的独占
             setExclusiveOwnerThread(current);
             return true;
         }
@@ -240,6 +251,9 @@ sharedCount 和 exclusiveCount 一般不会同时不为 0，只有当线程占�
                 "attempt to unlock read lock, not locked by current thread");
         }
 
+        /**
+         * 读锁获取
+         */
         protected final int tryAcquireShared(int unused) {
             /*
              * Walkthrough:
@@ -256,30 +270,50 @@ sharedCount 和 exclusiveCount 一般不会同时不为 0，只有当线程占�
              *    apparently not eligible or CAS fails or count
              *    saturated, chain to version with full retry loop.
              */
+            // 获取当前线程
             Thread current = Thread.currentThread();
+            // 获取锁状态值
             int c = getState();
+            // 如果写锁线程数 != 0 ，且独占锁不是当前线程则返回失败，可能存在写锁到读锁的降级
             if (exclusiveCount(c) != 0 &&
                 getExclusiveOwnerThread() != current)
                 return -1;
+            // 读锁数量
             int r = sharedCount(c);
+            /**
+             * readerShouldBlock():读锁是否需要等待（公平锁原则）
+             * r < MAX_COUNT：持有线程小于最大数（65535）
+             * compareAndSetState(c, c + SHARED_UNIT)：设置读取锁状态
+             */
             if (!readerShouldBlock() &&
                 r < MAX_COUNT &&
                 compareAndSetState(c, c + SHARED_UNIT)) {
                 if (r == 0) {
+                    // 设置第一个读线程
                     firstReader = current;
+                    // 读线程占用的资源数为1
                     firstReaderHoldCount = 1;
+                // 当前线程为第一个读线程，表示第一个读锁线程重入
                 } else if (firstReader == current) {
+                    // 占用资源数加1
                     firstReaderHoldCount++;
                 } else {
+                    // 读锁数量不为0并且不为当前线程
                     HoldCounter rh = cachedHoldCounter;
+                    // 计数器为空或者计数器的tid不为当前正在运行的线程的tid
                     if (rh == null || rh.tid != getThreadId(current))
+                        // 获取当前线程对应的计数器
                         cachedHoldCounter = rh = readHolds.get();
+                    // 计数为0
                     else if (rh.count == 0)
+                        // 加入到readHolds中
                         readHolds.set(rh);
+                    // 计数+1
                     rh.count++;
                 }
                 return 1;
             }
+            // 如果读锁获取失败，调用该方法进行CAS循环获取
             return fullTryAcquireShared(current);
         }
 
@@ -287,7 +321,7 @@ sharedCount 和 exclusiveCount 一般不会同时不为 0，只有当线程占�
          * Full version of acquire for reads, that handles CAS misses
          * and reentrant reads not dealt with in tryAcquireShared.
          */
-        final int fullTryAcquireShared(Thread current) {
+         final int fullTryAcquireShared(Thread current) {
             /*
              * This code is in part redundant with that in
              * tryAcquireShared but is simpler overall by not
@@ -296,12 +330,16 @@ sharedCount 和 exclusiveCount 一般不会同时不为 0，只有当线程占�
              */
             HoldCounter rh = null;
             for (;;) {
+                // 获取锁当前状态值
                 int c = getState();
+                // 如果写入锁被线程持有
                 if (exclusiveCount(c) != 0) {
+                    // 并且写入锁的持有者不是当前线程，则返回-1，获取锁失败
                     if (getExclusiveOwnerThread() != current)
                         return -1;
                     // else we hold the exclusive lock; blocking here
                     // would cause deadlock.
+                // 根据公平模式来决定是否阻塞当前线程
                 } else if (readerShouldBlock()) {
                     // Make sure we're not acquiring read lock reentrantly
                     if (firstReader == current) {
@@ -321,6 +359,8 @@ sharedCount 和 exclusiveCount 一般不会同时不为 0，只有当线程占�
                 }
                 if (sharedCount(c) == MAX_COUNT)
                     throw new Error("Maximum lock count exceeded");
+                // 尝试CAS设置同步状态
+                // 后续操作和tryAquireShared基本一致
                 if (compareAndSetState(c, c + SHARED_UNIT)) {
                     if (sharedCount(c) == 0) {
                         firstReader = current;
