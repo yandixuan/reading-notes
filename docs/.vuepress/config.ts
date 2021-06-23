@@ -25,6 +25,7 @@ const sidebar: SidebarConfig = {
         '/concurrent/ThreadLocal.md',
         '/concurrent/InheritableThreadLocal.md',
         '/concurrent/AbstractOwnableSynchronizer.md',
+        '/concurrent/AbstractQueuedSynchronizer.md',
         '/concurrent/ConcurrentHashMap.md',
         '/concurrent/ExecutorService.md',
         '/concurrent/AbstractExecutorService.md',
