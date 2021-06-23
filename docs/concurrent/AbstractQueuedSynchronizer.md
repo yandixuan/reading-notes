@@ -174,3 +174,103 @@
     }
 
 ```
+
+## 属性
+
+```java
+    /**
+     * Head of the wait queue, lazily initialized.  Except for
+     * initialization, it is modified only via method setHead.  Note:
+     * If head exists, its waitStatus is guaranteed not to be
+     * CANCELLED.
+     */
+    /** Node等待队列头部节点，被volatile语义修饰 */
+    private transient volatile Node head;
+
+    /**
+     * Tail of the wait queue, lazily initialized.  Modified only via
+     * method enq to add new wait node.
+     */
+    /** Node等待队列尾部节点，被volatile语义修饰 */
+    private transient volatile Node tail;
+
+    /**
+     * The synchronization state.
+     */
+    /** 同步状态（上锁，释放即都是对state的修改） */
+    private volatile int state;
+
+```
+
+## 方法
+
+获取独占锁的入口途径之一
+
+### acquire
+
+```java
+
+    /**
+     * Acquires in exclusive mode, ignoring interrupts.  Implemented
+     * by invoking at least once {@link #tryAcquire},
+     * returning on success.  Otherwise the thread is queued, possibly
+     * repeatedly blocking and unblocking, invoking {@link
+     * #tryAcquire} until success.  This method can be used
+     * to implement method {@link Lock#lock}.
+     *
+     * @param arg the acquire argument.  This value is conveyed to
+     *        {@link #tryAcquire} but is otherwise uninterpreted and
+     *        can represent anything you like.
+     */
+    @ReservedStackAccess
+    public final void acquire(int arg) {
+        /**
+         * 1.tryAcquire尝试获取锁。此方法由子类提供具体实现逻辑
+         *
+         */
+        if (!tryAcquire(arg) &&
+            acquireQueued(addWaiter(Node.EXCLUSIVE), arg))
+            selfInterrupt();
+    }
+
+```
+
+### hasQueuedPredecessors
+
+判断同步队列是否有其他线程正在排队，此方法在公平锁的实现中所用到
+
+```java
+
+    public final boolean hasQueuedPredecessors() {
+        // The correctness of this depends on head being initialized
+        // before tail and on head.next being accurate if the current
+        // thread is first in queue.
+        // 获取尾节点
+        Node t = tail; // Read fields in reverse initialization order
+        // 获取头节点
+        Node h = head;
+        Node s;
+        /**
+         * 1. 如果 h==t 说明当前线程前面没有节点 直接返回false
+         * 2. h!=t 代表了队列必有2个以上的元素，可能是 一个new Node(),和
+         * 3. 如果而(s= h.next)==null为true，有其他线程第一次正在入队时，可能会出现。见AQS的enq方法，compareAndSetHead(node)完成，
+         *    还没执行tail=head语句时，此时tail=null,head=newNode,head.next=null。这种情况肯定是有线程进入了队列等待所以返回true
+         * 4. (s = h.next) == null为false，head节点可能占用着锁（除了第一次执行enq()入队列时，head仅仅是个new Node()，没有实际对应任何线程，
+         *    但是却“隐式”对应第一个获得锁但并未入队列的线程，和后续的head在含义上保持一致），也可能释放了锁（unlock()）,未被阻塞的head.next节点对应的线程在任意时刻都是有必要去尝试获取锁
+         */
+        return h != t &&
+            ((s = h.next) == null || s.thread != Thread.currentThread());
+    }
+```
+
+### addWaiter
+
+```java
+
+```
+
+### acquireQueued
+
+```java
+
+```
