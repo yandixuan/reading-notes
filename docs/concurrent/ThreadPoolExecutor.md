@@ -459,7 +459,7 @@ keepAliveTime 是线程池中空闲线程等待工作的超时时间。
                 }
                 // 判断是否添加成功
                 if (workerAdded) {
-                    // 启动线程
+                    // 启动线程，随后会调用runWorker方法
                     t.start();
                     // 工作标志true
                     workerStarted = true;
@@ -472,6 +472,188 @@ keepAliveTime 是线程池中空闲线程等待工作的超时时间。
         }
         return workerStarted;
     }
+```
+
+### runWorker
+
+```java
+    final void runWorker(Worker w) {
+        // 获取当前线程
+        Thread wt = Thread.currentThread();
+        // task指向worker的firstTask
+        Runnable task = w.firstTask;
+        // worker对firstTask的引用置null
+        w.firstTask = null;
+        // 这里为什么执行一次，是因为new Worker时state为-1，需要重置为0
+        w.unlock(); // allow interrupts
+        // 任务是否正常执行完成标志
+        boolean completedAbruptly = true;
+        try {
+            // 优先考虑firstTask，否则从任务队列取任务
+            while (task != null || (task = getTask()) != null) {
+                // 工作线程加锁，说明正在执行任务
+                w.lock();
+                // If pool is stopping, ensure thread is interrupted;
+                // if not, ensure thread is not interrupted.  This
+                // requires a recheck in second case to deal with
+                // shutdownNow race while clearing interrupt
+                /**
+                 * 如果线程池的运行状态至少是STOP,则要保证线程被打上中断标记
+                 * 如果不是的话，则要保证当前线程不是中断状态
+                 */
+                 /**
+                  * 有可能外部线程调用shutdownNow,而advanceRunState(STOP);interruptWorkers();这2个操作可能因为指令重排的原因，
+                  * 导致状态还没设置成STOP，线程都被打上中断标志，所以Thread.interrupted(),保证状态变为STOP之前，worker线程都不会
+                  * 被打上中断状态
+                  */
+                if ((runStateAtLeast(ctl.get(), STOP) ||
+                     (Thread.interrupted() &&
+                      runStateAtLeast(ctl.get(), STOP))) &&
+                    !wt.isInterrupted())
+                    wt.interrupt();
+                try {
+                    // 子类实现
+                    beforeExecute(wt, task);
+                    Throwable thrown = null;
+                    try {
+                        // 执行任务
+                        task.run();
+                    } catch (RuntimeException x) {
+                        thrown = x; throw x;
+                    } catch (Error x) {
+                        thrown = x; throw x;
+                    } catch (Throwable x) {
+                        thrown = x; throw new Error(x);
+                    } finally {
+                        // 子类执行
+                        afterExecute(task, thrown);
+                    }
+                } finally {
+                    task = null;
+                    // 任务完成数++，无论是否异常
+                    w.completedTasks++;
+                    // 解锁
+                    w.unlock();
+                }
+            }
+            // 完成了所有任务，正常退出
+            completedAbruptly = false;
+        } finally {
+            // 执行工作线程的退出操作
+            processWorkerExit(w, completedAbruptly);
+        }
+    }
+```
+
+### getTask
+
+getTask 只有 return null，就会代表有一个线程会即将销毁
+
+```java
+
+    private Runnable getTask() {
+        // 从工作队列获取任务是否超时
+        boolean timedOut = false; // Did the last poll() time out?
+        // 死循环
+        for (;;) {
+            // 获取线程池状态
+            int c = ctl.get();
+            // 算出运行池状态
+            int rs = runStateOf(c);
+
+            // Check if queue empty only if necessary.
+            /**
+             * 1.运行状态大于等于SHUTDOWN，但是SHUTDOWN还是会继续处理工作列队剩余任务的，所以还要继续判断
+             * 2.运行状态为STOP 或者 工作队列没有元素可以取了
+             */
+            if (rs >= SHUTDOWN && (rs >= STOP || workQueue.isEmpty())) {
+                // 线程池工作线程池数量减 1，返回null
+                // 由于取的任务为空，后续会销毁该Worker
+                decrementWorkerCount();
+                return null;
+            }
+            // 走到这里，说明线程池还在Running状态中
+            int wc = workerCountOf(c);
+
+            // Are workers subject to culling?
+            // timed临时变量勇于线程超时控制，决定是否需要通过poll()此带超时的非阻塞方法进行任务队列的任务拉取
+            // 1.allowCoreThreadTimeOut默认值为false，如果设置为true，则允许核心线程也能通过poll()方法从任务队列中拉取任务
+            // 2.工作线程数大于核心线程数的时候，说明线程池中创建了额外的非核心线程，这些非核心线程一定是通过poll()方法从任务队列中拉取任务
+            boolean timed = allowCoreThreadTimeOut || wc > corePoolSize;
+
+            /**
+             * 1.wc > maximumPoolSize说明当前的工作线程总数大于maximumPoolSize，说明了通过setMaximumPoolSize()方法减少了线程池容量
+             * 2.timed为true说明线程池希望在没有任务后销毁线程，而timedOut为true说明在相应时间内没有从任务队列取到任务，那肯定是考虑减少线程
+             * 而如果timed为fasle时，代表当前工作线程数量不超过核心线程池了也不需要减少线程数量
+             * 3.所以直接判断 线程数量是否大于1，或者工作队列为空，此时工作线程数量肯定超过核心数量需要减少工作线程数量
+             */
+            if ((wc > maximumPoolSize || (timed && timedOut))
+                && (wc > 1 || workQueue.isEmpty())) {
+                // CAS失败，存在并发。继续循环
+                if (compareAndDecrementWorkerCount(c))
+                    return null;
+                continue;
+            }
+
+            try {
+                // 如果timed为true，通过poll()方法做超时拉取，keepAliveTime时间内没有等待到有效的任务，则返回null
+                Runnable r = timed ?
+                    workQueue.poll(keepAliveTime, TimeUnit.NANOSECONDS) :
+                    workQueue.take();
+                if (r != null)
+                    return r;
+                // 超时了，也没拉取到任务，下一次循环会 尝试销毁线程
+                timedOut = true;
+            } catch (InterruptedException retry) {
+                timedOut = false;
+            }
+        }
+    }
+```
+
+### processWorkerExit
+
+```java
+
+    private void processWorkerExit(Worker w, boolean completedAbruptly) {
+        // 线程中断了，那么worker数量-1
+        if (completedAbruptly) // If abrupt, then workerCount wasn't adjusted
+            decrementWorkerCount();
+
+        final ReentrantLock mainLock = this.mainLock;
+        // 加锁
+        mainLock.lock();
+        try {
+            // completedTaskCount加上worker完成的数量
+            completedTaskCount += w.completedTasks;
+            // 移除worker
+            workers.remove(w);
+        } finally {
+            mainLock.unlock();
+        }
+        // 尝试结束线程池
+        tryTerminate();
+        // 获取线程池状态
+        int c = ctl.get();
+        // 如果运行状态小于STOP,说明状态是RUNNING或SHUTDOWN
+        if (runStateLessThan(c, STOP)) {
+            // 如果正常完成任务
+            if (!completedAbruptly) {
+                // 获取最小线程数量
+                int min = allowCoreThreadTimeOut ? 0 : corePoolSize;
+                // 如果工作队列不是空的
+                if (min == 0 && ! workQueue.isEmpty())
+                    // 最小有一个线程
+                    min = 1;
+                // 如果线程池数量大于等于最小值，直接退出
+                if (workerCountOf(c) >= min)
+                    return; // replacement not needed
+            }
+            // 如果线程意外退出，或者是小于最小需要的线程数量都会添加新的Worker
+            addWorker(null, false);
+        }
+    }
+
 ```
 
 ### addWorkerFailed
