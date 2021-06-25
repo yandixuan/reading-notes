@@ -227,10 +227,66 @@
         /**
          * 1.tryAcquire尝试获取锁。此方法由子类提供具体实现逻辑
          * 2.如果tryAcquire获取锁失败，定义Node为独占模式，加入等待队列
+         * 3.由于&&短路的特性，在获取锁的过程中，返回的中断标志为true，会再次让线程自我中断一次
          */
         if (!tryAcquire(arg) &&
             acquireQueued(addWaiter(Node.EXCLUSIVE), arg))
             selfInterrupt();
+    }
+
+```
+
+### acquireInterruptibly
+
+获取锁时响应中断
+
+```java
+
+    public final void acquireInterruptibly(int arg)
+            throws InterruptedException {
+        // 判断当前线程是否中断（清除中断标记）
+        if (Thread.interrupted())
+            throw new InterruptedException();
+        if (!tryAcquire(arg))
+            doAcquireInterruptibly(arg);
+    }
+
+```
+
+### doAcquireInterruptibly
+
+相应中断式的，获取锁资源
+
+```java
+
+    private void doAcquireInterruptibly(int arg)
+        throws InterruptedException {
+        // 独占模式节点
+        final Node node = addWaiter(Node.EXCLUSIVE);
+        // 失败标志
+        boolean failed = true;
+        try {
+            // 死循环
+            for (;;) {
+                // 这里的代码跟非中断式的代码一样
+                final Node p = node.predecessor();
+                if (p == head && tryAcquire(arg)) {
+                    setHead(node);
+                    p.next = null; // help GC
+                    failed = false;
+                    return;
+                }
+                // 唯一的区别就是，如果标志中断返回true了，那么抛出线程中断异常
+                if (shouldParkAfterFailedAcquire(p, node) &&
+                    parkAndCheckInterrupt())
+                    throw new InterruptedException();
+            }
+        } finally {
+            // 在抛出的情况下，failed才是true
+            if (failed)
+                // 取消节点排队
+                cancelAcquire(node);
+        }
     }
 
 ```
@@ -421,5 +477,57 @@ SIGNAL 这个状态就有点意思了，它不是表征当前节点的状态，�
         // 通过LockSupport.park停止当前线程，那么当前线程就停在此处了，让出CPU时间
         LockSupport.park(this);
         return Thread.interrupted();
+    }
+```
+
+### cancelAcquire
+
+```java
+    private void cancelAcquire(Node node) {
+        // Ignore if node doesn't exist
+        // 如果node为空直接退出
+        if (node == null)
+            return;
+        // node不再关联到任何线程
+        node.thread = null;
+
+        // Skip cancelled predecessors
+        // 跳过被cancel的前继node，找到一个有效的前继节点pred
+        Node pred = node.prev;
+        while (pred.waitStatus > 0)
+            node.prev = pred = pred.prev;
+
+        // predNext is the apparent node to unsplice. CASes below will
+        // fail if not, in which case, we lost race vs another cancel
+        // or signal, so no further action is necessary.
+        // 获取过滤后的前继节点的后继节点
+        Node predNext = pred.next;
+
+        // Can use unconditional write instead of CAS here.
+        // After this atomic step, other Nodes can skip past us.
+        // Before, we are free of interference from other threads.
+        // 将node的waitStatus置为CANCELLED
+        node.waitStatus = Node.CANCELLED;
+
+        // If we are the tail, remove ourselves.
+        if (node == tail && compareAndSetTail(node, pred)) {
+            compareAndSetNext(pred, predNext, null);
+        } else {
+            // If successor needs signal, try to set pred's next-link
+            // so it will get one. Otherwise wake it up to propagate.
+            int ws;
+            if (pred != head &&
+                ((ws = pred.waitStatus) == Node.SIGNAL ||
+                 (ws <= 0 && compareAndSetWaitStatus(pred, ws, Node.SIGNAL))) &&
+                pred.thread != null) {
+                Node next = node.next;
+                if (next != null && next.waitStatus <= 0)
+                    compareAndSetNext(pred, predNext, next);
+            } else {
+                unparkSuccessor(node);
+            }
+
+            node.next = node; // help GC
+        }
     }
 ```
