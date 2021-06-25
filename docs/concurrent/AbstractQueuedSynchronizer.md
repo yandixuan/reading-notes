@@ -204,9 +204,9 @@
 
 ## 方法
 
-获取独占锁的入口途径之一
-
 ### acquire
+
+获取独占锁的入口途径之一
 
 ```java
 
@@ -226,7 +226,7 @@
     public final void acquire(int arg) {
         /**
          * 1.tryAcquire尝试获取锁。此方法由子类提供具体实现逻辑
-         *
+         * 2.如果tryAcquire获取锁失败，定义Node为独占模式，加入等待队列
          */
         if (!tryAcquire(arg) &&
             acquireQueued(addWaiter(Node.EXCLUSIVE), arg))
@@ -265,12 +265,161 @@
 
 ### addWaiter
 
+加入等待节点
+
 ```java
 
+    private Node addWaiter(Node mode) {
+        // 根据当前线程，模式初始化一个Node节点
+        Node node = new Node(Thread.currentThread(), mode);
+        // Try the fast path of enq; backup to full enq on failure
+        // 快速尝试一次从队列尾部插入节点
+        Node pred = tail;
+        if (pred != null) {
+            node.prev = pred;
+            if (compareAndSetTail(pred, node)) {
+                pred.next = node;
+                return node;
+            }
+        }
+        // 如果tail为空或者cas加入队尾失败，调用enq将节点添加到AQS队列
+        enq(node);
+        return node;
+    }
+```
+
+### enq
+
+死循环入队列
+
+```java
+
+    private Node enq(final Node node) {
+        // 死循环
+        for (;;) {
+            Node t = tail;
+            // 如果tail为空，那么代表队列是空的，必须初始化
+            if (t == null) { // Must initialize
+                // CAS设置头节点为一个New Node（隐式代表着获取锁，没入队列的线程）
+                if (compareAndSetHead(new Node()))
+                    // CAS设置头部之后，将尾部也设置成New Node
+                    tail = head;
+            } else {
+                // 走到这里队尾肯定不是空的，跟快速入队尾的操作一致，只不过是失败会无限循环直到能入队列为止
+                node.prev = t;
+                if (compareAndSetTail(t, node)) {
+                    t.next = node;
+                    return t;
+                }
+            }
+        }
+    }
 ```
 
 ### acquireQueued
 
+已经在队列中的 node 尝试去获取锁否则挂起
+
 ```java
 
+    final boolean acquireQueued(final Node node, int arg) {
+        boolean failed = true;
+        try {
+            // 线程是否中断标志
+            boolean interrupted = false;
+            for (;;) {
+                // 获取节点的前驱节点
+                final Node p = node.predecessor();
+                /**
+                 * 如果前驱节点是头结点，表示它的前驱的节点就是正在运行的线程，自己才是真正在排队的节点
+                 * 那么再去tryAcquire尝试获取锁，如果获取成功，说明此时前置线程已经运行结束，则将head设置为当前节点返回
+                 */
+                if (p == head && tryAcquire(arg)) {
+                    setHead(node);
+                    // 将前置节点移出队列，这样就没有指针指向它，可以被gc回收
+                    p.next = null; // help GC
+                    failed = false;
+                    //返回false表示不能被打断，意思是没有被挂起，也就是获得到了锁
+                    return interrupted;
+                }
+                /**
+                 * shouldParkAfterFailedAcquire将前置node设置为需要被挂起
+                 * shouldParkAfterFailedAcquire返回true才回因为 && 短路特效去尝试停泊线程
+                 * shouldParkAfterFailedAcquire返回false，会继续在死循环中尝试获取锁
+                 * parkAndCheckInterrupt会阻塞线程了，当该线程被唤醒会返回是否被中断过，如果被中断过我们通过interrupted记录下
+                 */
+                if (shouldParkAfterFailedAcquire(p, node) &&
+                    parkAndCheckInterrupt())
+                    interrupted = true;
+            }
+        } finally {
+            /**
+             * 而从前面的分析中我们知道，要从for(;;)中跳出来，只有一种可能，那就是当前线程已经拿到了锁，因为整个争锁过程我们都是不响应中断的，
+             * 所以不可能有异常抛出，既然是拿到了锁，failed就一定是true，所以这个finally块在这里实际上并没有什么用，它是为响应中断式的抢锁所服务的
+             */
+            if (failed)
+                cancelAcquire(node);
+        }
+    }
+
+```
+
+### shouldParkAfterFailedAcquire
+
+SIGNAL 这个状态就有点意思了，它不是表征当前节点的状态，而是当前节点的下一个节点的状态。
+当一个节点的 waitStatus 被置为 SIGNAL，就说明它的下一个节点（即它的后继节点）已经被挂起了（或者马上就要被挂起了），
+因此在当前节点释放了锁或者放弃获取锁时，如果它的 waitStatus 属性为 SIGNAL，它还要完成一个额外的操作——唤醒它的后继节点。
+
+```java
+
+    private static boolean shouldParkAfterFailedAcquire(Node pred, Node node) {
+        // 拿到前驱节点的状态
+        int ws = pred.waitStatus;
+        // 如果已经告诉前驱节点拿到锁后通知自己一下，那就可以安心休息了
+        if (ws == Node.SIGNAL)
+            /*
+             * This node has already set status asking a release
+             * to signal it, so it can safely park.
+             */
+            return true;
+        // 如果前驱节点放弃等待，那就一直往前找，直到找到最近一个正常等待的状态，并排在它的后边
+        if (ws > 0) {
+            /*
+             * Predecessor was cancelled. Skip over predecessors and
+             * indicate retry.
+             */
+            do {
+                node.prev = pred = pred.prev;
+            } while (pred.waitStatus > 0);
+            // 直到找到还在一直等待的节点，与node进行关联，中间部分的节点(可达性分析)没有引用了会被GC
+            pred.next = node;
+        } else {
+            /*
+             * waitStatus must be 0 or PROPAGATE.  Indicate that we
+             * need a signal, but don't park yet.  Caller will need to
+             * retry to make sure it cannot acquire before parking.
+             */
+
+            /**
+             * 前驱节点的状态既不是SIGNAL，也不是CANCELLED
+             * 用CAS设置前驱节点的ws为 Node.SIGNAL，它会在释放锁时唤醒自己
+             */
+            compareAndSetWaitStatus(pred, ws, Node.SIGNAL);
+        }
+        return false;
+    }
+```
+
+### parkAndCheckInterrupt
+
+我们从 LockSupport.park(this)处被唤醒，我们并不知道是因为什么原因被唤醒，可能是因为别的线程释放了锁，
+调用了 LockSupport.unpark(s.thread)，也有可能是因为当前线程在等待中被中断了，因此我们通过 Thread.interrupted()方法检查了当前线程的中断标志，
+并将它记录下来，在我们最后返回 acquireQueued 方法后，如果发现当前线程曾经被中断过，那我们就把当前线程再中断一次。
+
+```java
+     private final boolean parkAndCheckInterrupt() {
+        // 通过LockSupport.park停止当前线程，那么当前线程就停在此处了，让出CPU时间
+        LockSupport.park(this);
+        return Thread.interrupted();
+    }
 ```
