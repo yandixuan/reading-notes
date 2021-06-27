@@ -253,6 +253,135 @@
 
 ```
 
+### release
+
+独占锁释放锁资源
+
+```java
+    public final boolean release(int arg) {
+        // tryRelease由子类实现
+        if (tryRelease(arg)) {
+            // 获取头节点
+            Node h = head;
+            // 如果头结点不为空，并且头节点的状态不为0，0代表的是新建节点状态，那么代表该节点的后继节点需要唤醒
+            if (h != null && h.waitStatus != 0)
+                // 唤醒后继节点
+                unparkSuccessor(h);
+            return true;
+        }
+        return false;
+    }
+```
+
+### acquireShared
+
+获取共享锁
+
+```java
+    public final void acquireShared(int arg) {
+        // tryAcquireShared 返回-1获取锁失败，返回值大于1或者0获取锁成功
+        if (tryAcquireShared(arg) < 0)
+            // 获取锁失败，进入队列操作
+            doAcquireShared(arg);
+    }
+```
+
+### doAcquireShared
+
+获取共享锁失败，进入队列操作（非响应中断）
+
+```java
+    private void doAcquireShared(int arg) {
+        /**
+         * 1.新建共享模式的Node对象
+         * 2.入队列
+         */
+        final Node node = addWaiter(Node.SHARED);
+        // 入队列失败标志
+        boolean failed = true;
+        try {
+            // 线程是否被中断标志
+            boolean interrupted = false;
+            // 死循环
+            for (;;) {
+                // 获取前驱节点
+                final Node p = node.predecessor();
+                // 如果前继节点是head，则尝试获取锁。因为头节点可能处于正在获取锁，或者已经获取到锁了，那么该节点可以尝试去获取锁
+                if (p == head) {
+                    int r = tryAcquireShared(arg);
+                    if (r >= 0) {
+                        // 获取锁成功，设置新head和共享传播（唤醒下一个共享节点）
+                        setHeadAndPropagate(node, r);
+                        p.next = null; // help GC
+                        if (interrupted)
+                            selfInterrupt();
+                        failed = false;
+                        return;
+                    }
+                }
+                // 如果获取锁失败，那么我们是否考虑阻塞该节点，非响应中断
+                if (shouldParkAfterFailedAcquire(p, node) &&
+                    parkAndCheckInterrupt())
+                    interrupted = true;
+            }
+        } finally {
+            if (failed)
+                cancelAcquire(node);
+        }
+    }
+```
+
+### setHeadAndPropagate
+
+入参 node 所代表的线程一定是当前执行的线程，propagate 则代表 tryAcquireShared 的返回值，
+由于有 if (r >= 0)的保证，propagate 必定为>=0，这里返回值的意思是：如果>0，说明我这次获取共享锁成功后，
+还有剩余共享锁可以获取；如果=0，说明我这次获取共享锁成功后，没有剩余共享锁可以获取
+
+```java
+
+    private void setHeadAndPropagate(Node node, int propagate) {
+        // 记录老的头节点
+        Node h = head; // Record old head for check below
+        // 因为该节点已经获取到了锁，那么在setHead中可以将线程的引用取消掉
+        setHead(node);
+        /*
+         * Try to signal next queued node if:
+         *   Propagation was indicated by caller,
+         *     or was recorded (as h.waitStatus either before
+         *     or after setHead) by a previous operation
+         *     (note: this uses sign-check of waitStatus because
+         *      PROPAGATE status may transition to SIGNAL.)
+         * and
+         *   The next node is waiting in shared mode,
+         *     or we don't know, because it appears null
+         *
+         * The conservatism in both of these checks may cause
+         * unnecessary wake-ups, but only when there are multiple
+         * racing acquires/releases, so most need signals now or soon
+         * anyway.
+         */
+        /**
+         * h == null和(h = head) == null和s == null是为了防止空指针异常发生的标准写法，但这不代表就一定会发现它们为空的情况。
+         * 这里的话，h == null和(h = head) == null是不可能成立，因为只要执行过addWaiter，CHL队列至少也会有一个node存在的；
+         * 但s == null是可能发生的，比如node已经是队列的最后一个节点,
+         * 如果propagate > 0不成立，而h.waitStatus < 0成立。这说明旧head的status<0。但如果你看doReleaseShared的逻辑，
+         * 会发现在unparkSuccessor之前就会CAS设置head的status为0的，在unparkSuccessor也会进行一次CAS尝试，
+         * 因为head的status为0代表一种中间状态（head的后继代表的线程已经唤醒，但它还没有做完工作），或者代表head是tail。而这里旧head的status<0，
+         * 只能是由于doReleaseShared里的compareAndSetWaitStatus(h, 0, Node.PROPAGATE)的操作，而且由于当前执行setHeadAndPropagate的线程只会在最后一句才执行doReleaseShared，
+         * 所以出现这种情况，一定是因为有另一个线程在调用doReleaseShared才能造成，而这很可能是因为在中间状态时，又有人释放了共享锁。propagate == 0只能代表当时tryAcquireShared后没有共享锁剩余，
+         * 但之后的时刻很可能又有共享锁释放出来了。
+         *
+         */
+        if (propagate > 0 || h == null || h.waitStatus < 0 ||
+            (h = head) == null || h.waitStatus < 0) {
+            Node s = node.next;
+            if (s == null || s.isShared())
+                doReleaseShared();
+        }
+    }
+
+```
+
 ### doAcquireInterruptibly
 
 相应中断式的，获取锁资源
@@ -510,24 +639,76 @@ SIGNAL 这个状态就有点意思了，它不是表征当前节点的状态，�
         node.waitStatus = Node.CANCELLED;
 
         // If we are the tail, remove ourselves.
+        // 如果node是尾节点，直接将pred设置为尾节点，pred是我们能找到最近一个有效节点
         if (node == tail && compareAndSetTail(node, pred)) {
+            // CAS设置pred节点的next为null(所以前面我们会获取一次正常状态pred的后继节点)，pred节点后续的节点都是CANCELLED的
             compareAndSetNext(pred, predNext, null);
         } else {
             // If successor needs signal, try to set pred's next-link
             // so it will get one. Otherwise wake it up to propagate.
             int ws;
+            // 如果当前节点的前驱节点不是头节点 同时 前驱节点的等待状态为SIGNAL(如果不是SIGNAL那就设置为SIGNAL) 且 前驱节点封装的线程不为NULL
+            // pred的前驱节点无法CAS设置为SIGNAL状态 或者 前驱节点线程为null，可能刚好被取消了，所以都应该跳转到else分支：唤醒node的后继节店让它来去删除node
             if (pred != head &&
                 ((ws = pred.waitStatus) == Node.SIGNAL ||
                  (ws <= 0 && compareAndSetWaitStatus(pred, ws, Node.SIGNAL))) &&
                 pred.thread != null) {
+                // 获取节点的后继节点
                 Node next = node.next;
+                // 如果后继节点的等待状态不为CANCELLED，则通过CAS将前驱节点的后继指针指向当前节点的后继节点
                 if (next != null && next.waitStatus <= 0)
                     compareAndSetNext(pred, predNext, next);
             } else {
+                // 如果当前节点的前驱节点是头节点，则直接唤醒当前节点的后继节点，让它来剔除当前节点
                 unparkSuccessor(node);
             }
-
+            // gc回收node
             node.next = node; // help GC
         }
     }
+```
+
+### unparkSuccessor
+
+唤醒当前节点的后继节点
+
+```java
+
+    private void unparkSuccessor(Node node) {
+        /*
+         * If status is negative (i.e., possibly needing signal) try
+         * to clear in anticipation of signalling.  It is OK if this
+         * fails or if status is changed by waiting thread.
+         */
+        // 获取节点的=waitStatus
+        int ws = node.waitStatus;
+        /**
+         * 1.这里需要判断节点状态是否为取消
+         * 2.如果不是取消状态，那么该节点应该可能正在获取锁资源所以我们要把该节点的状态通过CAS设置成0
+         */
+        if (ws < 0)
+            compareAndSetWaitStatus(node, ws, 0);
+
+        /*
+         * Thread to unpark is held in successor, which is normally
+         * just the next node.  But if cancelled or apparently null,
+         * traverse backwards from tail to find the actual
+         * non-cancelled successor.
+         */
+        // 获取节点的后继节点
+        Node s = node.next;
+        // 如果后继节点是空 或者 后继节点被取消了
+        if (s == null || s.waitStatus > 0) {
+            // 将后继节点置空
+            s = null;
+            // 从尾部开始寻找一个有效节点
+            for (Node t = tail; t != null && t != node; t = t.prev)
+                if (t.waitStatus <= 0)
+                    s = t;
+        }
+        // 节点不为空就将其唤醒
+        if (s != null)
+            LockSupport.unpark(s.thread);
+    }
+
 ```
