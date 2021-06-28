@@ -340,7 +340,7 @@
 ```java
 
     private void setHeadAndPropagate(Node node, int propagate) {
-        // 记录老的头节点
+        // 记录旧的头节点
         Node h = head; // Record old head for check below
         // 因为该节点已经获取到了锁，那么在setHead中可以将线程的引用取消掉
         setHead(node);
@@ -361,25 +361,79 @@
          * anyway.
          */
         /**
-         * h == null和(h = head) == null和s == null是为了防止空指针异常发生的标准写法，但这不代表就一定会发现它们为空的情况。
-         * 这里的话，h == null和(h = head) == null是不可能成立，因为只要执行过addWaiter，CHL队列至少也会有一个node存在的；
-         * 但s == null是可能发生的，比如node已经是队列的最后一个节点,
-         * 如果propagate > 0不成立，而h.waitStatus < 0成立。这说明旧head的status<0。但如果你看doReleaseShared的逻辑，
-         * 会发现在unparkSuccessor之前就会CAS设置head的status为0的，在unparkSuccessor也会进行一次CAS尝试，
-         * 因为head的status为0代表一种中间状态（head的后继代表的线程已经唤醒，但它还没有做完工作），或者代表head是tail。而这里旧head的status<0，
-         * 只能是由于doReleaseShared里的compareAndSetWaitStatus(h, 0, Node.PROPAGATE)的操作，而且由于当前执行setHeadAndPropagate的线程只会在最后一句才执行doReleaseShared，
-         * 所以出现这种情况，一定是因为有另一个线程在调用doReleaseShared才能造成，而这很可能是因为在中间状态时，又有人释放了共享锁。propagate == 0只能代表当时tryAcquireShared后没有共享锁剩余，
-         * 但之后的时刻很可能又有共享锁释放出来了。
-         *
+         * 1.propagate > 0说明还有资源可以获取，当然需要唤醒后面的线程
+         * 2.h.waitStatus < 0 代表旧的头节点后面的节点可以被唤醒
+         * 3.(h = head) == null || h.waitStatus < 0 这个操作是说新的头节点后面的节点可以被唤醒
+         * （前面迷惑性h==null,是标准判空写法，防止异常）
          */
         if (propagate > 0 || h == null || h.waitStatus < 0 ||
             (h = head) == null || h.waitStatus < 0) {
             Node s = node.next;
+            // s==null 判空写法，如果后续节点是共享模式节点，尝试唤醒节点
             if (s == null || s.isShared())
-                doReleaseShared();
+                    doReleaseShared();
         }
     }
 
+```
+
+### releaseShared
+
+```java
+    public final boolean releaseShared(int arg) {
+        if (tryReleaseShared(arg)) {
+            doReleaseShared();
+            return true;
+        }
+        return false;
+    }
+```
+
+### doReleaseShared
+
+共享锁释放资源
+
+```java
+    private void doReleaseShared() {
+        /*
+         * Ensure that a release propagates, even if there are other
+         * in-progress acquires/releases.  This proceeds in the usual
+         * way of trying to unparkSuccessor of head if it needs
+         * signal. But if it does not, status is set to PROPAGATE to
+         * ensure that upon release, propagation continues.
+         * Additionally, we must loop in case a new node is added
+         * while we are doing this. Also, unlike other uses of
+         * unparkSuccessor, we need to know if CAS to reset status
+         * fails, if so rechecking.
+         */
+        // 死循环
+        for (;;) {
+            // 获取CLH队列头节点
+            Node h = head;
+            if (h != null && h != tail) {
+                int ws = h.waitStatus;
+                // 判断头节点的waitStatus是否为SIGNAL，
+                // 如果为SIGNAL，该值必为其后继节点设置的，说明后继节点等待被唤醒
+                if (ws == Node.SIGNAL) {
+                    // CAS 将头节点的waitStatus由SIGNAL设置为0, 相当于重置
+                    // 这个进行CAS主要是考虑release时也会调用该方法，需要并发控制
+                    if (!compareAndSetWaitStatus(h, Node.SIGNAL, 0))
+                        continue;            // loop to recheck cases
+                    // 唤醒后继节点
+                    unparkSuccessor(h);
+                }
+                /**
+                 * 如果不为SIGNAL，接着会进行判断当前头节点的waitStatus是否为0，如果不为0，进行执行for循环；
+                 * 如果为0，代表已经当前头节点的后继节点已经被唤醒，那么就将头节点的waitStatus设置为PROPAGATE，代表在下次acquireShared时无条件地传播
+                 */
+                else if (ws == 0 &&
+                         !compareAndSetWaitStatus(h, 0, Node.PROPAGATE))
+                    continue;                // loop on failed CAS
+            }
+            if (h == head)                   // loop if head changed
+                break;
+        }
+    }
 ```
 
 ### doAcquireInterruptibly
