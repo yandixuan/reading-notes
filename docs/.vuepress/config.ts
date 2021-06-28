@@ -4,7 +4,6 @@ import type { SidebarConfig } from '@vuepress/theme-default';
 const sidebar: SidebarConfig = {
   '/collection/': [
     {
-      isGroup: true,
       text: 'Java8源码阅读',
       children: [
         '/collection/ArrayDeque.md',
@@ -17,7 +16,6 @@ const sidebar: SidebarConfig = {
   ],
   '/concurrent/': [
     {
-      isGroup: true,
       text: 'concurrent',
       children: [
         '/concurrent/RunnableFuture.md',
