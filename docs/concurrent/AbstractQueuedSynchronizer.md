@@ -175,32 +175,9 @@
 
 ```
 
-## 属性
+### ConditionObject
 
-```java
-    /**
-     * Head of the wait queue, lazily initialized.  Except for
-     * initialization, it is modified only via method setHead.  Note:
-     * If head exists, its waitStatus is guaranteed not to be
-     * CANCELLED.
-     */
-    /** Node等待队列头部节点，被volatile语义修饰 */
-    private transient volatile Node head;
-
-    /**
-     * Tail of the wait queue, lazily initialized.  Modified only via
-     * method enq to add new wait node.
-     */
-    /** Node等待队列尾部节点，被volatile语义修饰 */
-    private transient volatile Node tail;
-
-    /**
-     * The synchronization state.
-     */
-    /** 同步状态（上锁，释放即都是对state的修改） */
-    private volatile int state;
-
-```
+[源码分析](/concurrent/ConditionObject.md)
 
 ## 方法
 
@@ -765,4 +742,27 @@ SIGNAL 这个状态就有点意思了，它不是表征当前节点的状态，�
             LockSupport.unpark(s.thread);
     }
 
+```
+
+### hasQueuedPredecessors（共享锁里使用）
+
+主要是用来判断线程需不需要排队，因为队列是 FIFO 的，所以需要判断队列中有没有相关线程的节点已经在排队了。有则返回 true 表示线程需要排队，没有则返回 false 则表示线程无需排队
+
+```java
+    public final boolean hasQueuedPredecessors() {
+        // The correctness of this depends on head being initialized
+        // before tail and on head.next being accurate if the current
+        // thread is first in queue.
+        // 读取头尾节点
+        Node t = tail; // Read fields in reverse initialization order
+        Node h = head;
+        Node s;
+        /**
+         * 1.h!=t代表队列至少有2节点，因为只有入队了一个节点，tail就会被head赋值，
+         * 2.(s=h.next)==null 为false表示头节点有后继节点，s.thread != Thread.currentThread()返回fasle表示着当前线程和后继节点的线程是相同的，那就说明已经轮到这个线程相关的节点去尝试获取同步状态了，自然无需排队，直接返回fasle
+         * 3.如果 (s=h.next)==null为true表示头节点后面没有节点自然也不需要排队了
+         */
+        return h != t &&
+            ((s = h.next) == null || s.thread != Thread.currentThread());
+    }
 ```
